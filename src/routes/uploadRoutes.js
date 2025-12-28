@@ -4,24 +4,30 @@ import multer from 'multer';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const router = express.Router();
 
-// Lógica para encontrar o caminho correto entre as pastas
+// Lógica para encontrar o caminho correto (ES Modules)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const storage = multer.diskStorage({
     destination(req, file, cb) {
-        // Navega para a pasta correta: sai de 'backend/src/routes', sobe duas vezes para 'www',
-        // e depois entra em 'frontend/public/images'
-        const uploadPath = path.join(__dirname, '../../../frontend/public/images');
+        // ✅ CORREÇÃO: Salva na pasta 'images' na raiz do BACKEND
+        // __dirname está em 'src/routes', então voltamos 2 níveis (../../) para chegar na raiz do backend
+        const uploadPath = path.join(__dirname, '../../images');
+
+        // Cria a pasta se ela não existir
+        if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+        }
+
         cb(null, uploadPath); 
     },
     filename(req, file, cb) {   
-        // ✅ ALTERAÇÃO: Define o nome do ficheiro como 'logoheader.png',
-        // substituindo o ficheiro existente para manter o link consistente.
-        cb(null, `logoheader.png`);
+        // Mantém o nome fixo para substituir o logo anterior
+        cb(null, 'logoheader.png');
     }
 });
 
@@ -34,7 +40,7 @@ function checkFileType(file, cb) {
     if (extname && mimetype) {
         return cb(null, true);
     } else {
-        cb('Apenas imagens são permitidas!');
+        cb(new Error('Apenas imagens são permitidas!'));
     }
 }
 
@@ -45,10 +51,10 @@ const upload = multer({
     }
 });
 
-// Cria a rota POST /api/upload
+// Rota POST /api/upload
 router.post('/', protect, admin, upload.single('image'), (req, res) => {
-    // Se o upload for bem-sucedido, devolve o caminho público do ficheiro.
-    // ✅ ALTERAÇÃO: Adiciona um timestamp como query string para evitar problemas de cache no navegador.
+    // Retorna o caminho que o frontend vai usar para acessar a imagem via API
+    // O timestamp (?t=...) força o navegador a baixar a nova imagem em vez de usar o cache
     res.send({
         message: 'Imagem enviada com sucesso',
         imagePath: `/images/logoheader.png?t=${Date.now()}`

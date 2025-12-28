@@ -28,6 +28,8 @@ import paymentGatewayRoutes from './paymentGatewayRoutes.js'
 import imageGeneratorRoutes from './imageGeneratorRoutes.js';
 import heroBannerRoutes from './heroBannerRoutes.js'
 import lojaRoutes from './lojaRoutes.js';
+import cupomRoutes from './cupomRoutes.js';
+import footerRoutes from './footerRoutes.js';
 
 const router = express.Router();
 
@@ -62,6 +64,9 @@ router.use('/wishlist', wishlistRoutes);
 router.use('/payment-gateways', paymentGatewayRoutes);
 router.use('/hero-banner', heroBannerRoutes);
 router.use('/integracao', integrationRoutes);
+router.use('/cupons', cupomRoutes);
+router.use('/footer', footerRoutes);
+
 
 
 export default router;

@@ -87,41 +87,43 @@ model pedidos {
 }
 
 model produtos {
-  id_produto          Int                  @id @default(autoincrement())
-  nome                String               @db.VarChar(255)
-  descricao           String?              @db.Text
-  preco               Decimal              @db.Decimal(10, 2)
-  estoque             Int                  @default(0)
-  imagem_url          String?              @db.VarChar(2048)
-  id_categoria        Int?
-  id_marca            Int?
-  desconto_percentual Int                  @default(0)
-  visualizacoes       Int                  @default(0)
-  peso                Decimal              @default(0.30) @db.Decimal(10, 2)
-  comprimento         Decimal              @default(16.00) @db.Decimal(10, 2)
-  altura              Decimal              @default(2.00) @db.Decimal(10, 2)
-  largura             Decimal              @default(11.00) @db.Decimal(10, 2)
-  mercado_livre_id    String?              @db.VarChar(255)
-  ml_status           String?              @default("Não Publicado") @db.VarChar(50)
-  tiktok_video_url    String?              @db.VarChar(2048)
-  tiktok_product_id   String?              @db.VarChar(255)
-  tiktok_status       String?              @default("Não Publicado") @db.VarChar(50)
-  custo               Decimal?             @db.Decimal(10, 2)
-  ativo               Boolean              @default(true)
-  ml_category_id      String?              @db.VarChar(255)
-  ml_attributes       Json?
-  id_subcategoria     Int?
-  active_ecommerce    Boolean              @default(true)
-  id_externo          String?              @unique(map: "uk_produtos_id_externo") @db.VarChar(255)
-  avaliacoes          avaliacoes[]
-  carrinhos           carrinhos[]
-  historico_precos    historico_precos[]
-  lista_desejos       lista_desejos[]
-  log_estoque         log_estoque[]
-  produto_subimagens  produto_subimagens[]
-  categorias          categorias?          @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_1")
-  marcas              marcas?              @relation(fields: [id_marca], references: [id_marca], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_2")
-  subcategorias       subcategorias?       @relation(fields: [id_subcategoria], references: [id_subcategoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_subcategoria")
+  id_produto            Int                     @id @default(autoincrement())
+  nome                  String                  @db.VarChar(255)
+  descricao             String?                 @db.Text
+  preco                 Decimal                 @db.Decimal(10, 2)
+  estoque               Int                     @default(0)
+  imagem_url            String?                 @db.VarChar(2048)
+  id_categoria          Int?
+  id_marca              Int?
+  desconto_percentual   Int                     @default(0)
+  visualizacoes         Int                     @default(0)
+  peso                  Decimal                 @default(0.30) @db.Decimal(10, 2)
+  comprimento           Decimal                 @default(16.00) @db.Decimal(10, 2)
+  altura                Decimal                 @default(2.00) @db.Decimal(10, 2)
+  largura               Decimal                 @default(11.00) @db.Decimal(10, 2)
+  mercado_livre_id      String?                 @db.VarChar(255)
+  ml_status             String?                 @default("Não Publicado") @db.VarChar(50)
+  tiktok_video_url      String?                 @db.VarChar(2048)
+  tiktok_product_id     String?                 @db.VarChar(255)
+  tiktok_status         String?                 @default("Não Publicado") @db.VarChar(50)
+  custo                 Decimal?                @db.Decimal(10, 2)
+  ativo                 Boolean                 @default(true)
+  ml_category_id        String?                 @db.VarChar(255)
+  ml_attributes         Json?
+  id_subcategoria       Int?
+  active_ecommerce      Boolean                 @default(true)
+  id_externo            String?                 @unique(map: "uk_produtos_id_externo") @db.VarChar(255)
+  avaliacoes            avaliacoes[]
+  carrinhos             carrinhos[]
+  cupons_desconto       cupons_desconto[]
+  historico_precos      historico_precos[]
+  lista_desejos         lista_desejos[]
+  log_estoque           log_estoque[]
+  produto_subimagens    produto_subimagens[]
+  categorias            categorias?             @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_1")
+  marcas                marcas?                 @relation(fields: [id_marca], references: [id_marca], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_2")
+  subcategorias         subcategorias?          @relation(fields: [id_subcategoria], references: [id_subcategoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_subcategoria")
+  promocoes_automaticas promocoes_automaticas[]
 
   @@index([id_categoria], map: "id_categoria")
   @@index([id_marca], map: "id_marca")
@@ -151,10 +153,12 @@ model usuarios {
 }
 
 model categorias {
-  id_categoria  Int             @id @default(autoincrement())
-  nome          String          @unique(map: "nome") @db.VarChar(255)
-  produtos      produtos[]
-  subcategorias subcategorias[]
+  id_categoria          Int                     @id @default(autoincrement())
+  nome                  String                  @unique(map: "nome") @db.VarChar(255)
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
+  subcategorias         subcategorias[]
 }
 
 model carrossel_slides {
@@ -177,12 +181,14 @@ model destaques_categorias {
 }
 
 model marcas {
-  id_marca   Int        @id @default(autoincrement())
-  nome       String     @unique(map: "nome") @db.VarChar(255)
-  imagem_url String?    @db.VarChar(2048)
-  ativo      Boolean    @default(true)
-  id_externo String?    @unique(map: "uk_marcas_id_externo") @db.VarChar(255)
-  produtos   produtos[]
+  id_marca              Int                     @id @default(autoincrement())
+  nome                  String                  @unique(map: "nome") @db.VarChar(255)
+  imagem_url            String?                 @db.VarChar(2048)
+  ativo                 Boolean                 @default(true)
+  id_externo            String?                 @unique(map: "uk_marcas_id_externo") @db.VarChar(255)
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
 }
 
 model configuracoes {
@@ -234,15 +240,33 @@ model comunicados {
 }
 
 model cupons_desconto {
-  id_cupom      Int                           @id @default(autoincrement())
-  codigo        String                        @unique(map: "codigo") @db.VarChar(50)
-  tipo_desconto cupons_desconto_tipo_desconto
-  valor         Decimal                       @db.Decimal(10, 2)
-  data_validade DateTime                      @db.DateTime(0)
-  usos_maximos  Int?
-  usos_atuais   Int                           @default(0)
-  ativo         Boolean                       @default(true)
-  pedidos       pedidos[]
+  id_cupom             Int                           @id @default(autoincrement())
+  codigo               String                        @unique(map: "codigo") @db.VarChar(50)
+  descricao            String?                       @db.VarChar(255)
+  tipo_desconto        cupons_desconto_tipo_desconto
+  valor                Decimal                       @db.Decimal(10, 2)
+  data_inicio          DateTime?                     @default(now()) @db.DateTime(0)
+  data_validade        DateTime                      @db.DateTime(0)
+  usos_maximos         Int?
+  usos_atuais          Int                           @default(0)
+  usos_por_user        Int?                          @default(1)
+  valor_minimo         Decimal?                      @default(0.00) @db.Decimal(10, 2)
+  alvo                 cupons_desconto_alvo          @default(TOTAL_CARRINHO)
+  id_produto_alvo      Int?
+  id_categoria_alvo    Int?
+  id_subcategoria_alvo Int?
+  id_marca_alvo        Int?
+  ativo                Boolean                       @default(true)
+  categorias           categorias?                   @relation(fields: [id_categoria_alvo], references: [id_categoria], onUpdate: NoAction, map: "fk_cupom_categoria")
+  marcas               marcas?                       @relation(fields: [id_marca_alvo], references: [id_marca], onUpdate: NoAction, map: "fk_cupom_marca")
+  produtos             produtos?                     @relation(fields: [id_produto_alvo], references: [id_produto], onUpdate: NoAction, map: "fk_cupom_produto")
+  subcategorias        subcategorias?                @relation(fields: [id_subcategoria_alvo], references: [id_subcategoria], onUpdate: NoAction, map: "fk_cupom_subcategoria")
+  pedidos              pedidos[]
+
+  @@index([id_subcategoria_alvo], map: "fk_cupom_subcategoria")
+  @@index([id_categoria_alvo], map: "idx_cupom_categoria")
+  @@index([id_marca_alvo], map: "idx_cupom_marca")
+  @@index([id_produto_alvo], map: "idx_cupom_produto")
 }
 
 model historico_precos {
@@ -346,11 +370,13 @@ model lojas {
 }
 
 model subcategorias {
-  id_subcategoria Int        @id @default(autoincrement())
-  nome            String     @db.VarChar(255)
-  id_categoria    Int
-  produtos        produtos[]
-  categorias      categorias @relation(fields: [id_categoria], references: [id_categoria], onDelete: Cascade, onUpdate: NoAction, map: "subcategorias_ibfk_1")
+  id_subcategoria       Int                     @id @default(autoincrement())
+  nome                  String                  @db.VarChar(255)
+  id_categoria          Int
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
+  categorias            categorias              @relation(fields: [id_categoria], references: [id_categoria], onDelete: Cascade, onUpdate: NoAction, map: "subcategorias_ibfk_1")
 
   @@index([id_categoria], map: "id_categoria")
 }
@@ -367,15 +393,46 @@ model config_integracao {
   ultima_sincronizacao DateTime?
 }
 
+model promocoes_automaticas {
+  id_promocao          Int                                 @id @default(autoincrement())
+  nome                 String                              @db.VarChar(255)
+  tipo_desconto        promocoes_automaticas_tipo_desconto
+  valor                Decimal                             @db.Decimal(10, 2)
+  data_inicio          DateTime                            @db.DateTime(0)
+  data_fim             DateTime                            @db.DateTime(0)
+  ativo                Boolean?                            @default(true)
+  alvo                 promocoes_automaticas_alvo
+  id_produto_alvo      Int?
+  id_categoria_alvo    Int?
+  id_subcategoria_alvo Int?
+  id_marca_alvo        Int?
+  prioridade           Int?                                @default(1)
+  criado_em            DateTime?                           @default(now()) @db.DateTime(0)
+  categorias           categorias?                         @relation(fields: [id_categoria_alvo], references: [id_categoria], onUpdate: NoAction, map: "fk_promo_categoria")
+  marcas               marcas?                             @relation(fields: [id_marca_alvo], references: [id_marca], onUpdate: NoAction, map: "fk_promo_marca")
+  produtos             produtos?                           @relation(fields: [id_produto_alvo], references: [id_produto], onUpdate: NoAction, map: "fk_promo_produto")
+  subcategorias        subcategorias?                      @relation(fields: [id_subcategoria_alvo], references: [id_subcategoria], onUpdate: NoAction, map: "fk_promo_subcategoria")
+
+  @@index([id_categoria_alvo], map: "fk_promo_categoria")
+  @@index([id_marca_alvo], map: "fk_promo_marca")
+  @@index([id_produto_alvo], map: "fk_promo_produto")
+  @@index([id_subcategoria_alvo], map: "fk_promo_subcategoria")
+  @@index([ativo], map: "idx_promo_ativo")
+  @@index([data_inicio, data_fim], map: "idx_promo_datas")
+}
+
+model menus_rodape {
+  id_link Int     @id @default(autoincrement())
+  titulo  String  @db.VarChar(255)
+  url     String  @db.VarChar(255)
+  coluna  String  @db.VarChar(50)
+  ordem   Int     @default(0)
+  ativo   Boolean @default(true)
+}
+
 enum banners_laterais_posicao {
   esquerda
   direita
-}
-
-enum banners_laterais_tipo_filtro {
-  categoria
-  marca
-  desconto
 }
 
 enum cupons_desconto_tipo_desconto {
@@ -388,4 +445,36 @@ enum usuarios_role {
   CAIXA
   ATENDENTE
   CLIENTE
+}
+
+enum promocoes_automaticas_tipo_desconto {
+  PERCENTUAL
+  FIXO
+}
+
+enum promocoes_automaticas_alvo {
+  TOTAL_CARRINHO
+  FRETE
+  PRODUTO
+  CATEGORIA
+  SUBCATEGORIA
+  MARCA
+}
+
+enum cupons_desconto_alvo {
+  TOTAL_CARRINHO
+  FRETE
+  PRODUTO
+  CATEGORIA
+  SUBCATEGORIA
+  MARCA
+}
+
+enum banners_laterais_tipo_filtro {
+  categoria
+  marca
+  desconto
+  produto
+  subcategoria
+  url
 }

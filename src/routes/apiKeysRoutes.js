@@ -5,26 +5,33 @@ import {
     updateMercadoLivreKey,
     getTikTokKeyStatus,
     updateTikTokKeys,
-    // ✅ 1. Importa as novas funções do controller
     getMercadoPagoGatewayKeys,
-    updateMercadoPagoGatewayKeys
+    updateMercadoPagoGatewayKeys,
+    // ✅ Importa as novas funções do ImgBB
+    getImgBBKeyStatus,
+    updateImgBBKey
 } from '../controllers/apiKeysController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
 
-// Rotas existentes
+// Mercado Livre
 router.route('/mercadolivre')
     .get(protect, admin, getMercadoLivreKeyStatus)
     .put(protect, admin, updateMercadoLivreKey);
 
+// TikTok
 router.route('/tiktok')
     .get(protect, admin, getTikTokKeyStatus)
     .put(protect, admin, updateTikTokKeys);
 
-// ✅ 2. Adiciona a nova rota para o Mercado Pago
+// Mercado Pago
 router.route('/mercadopago')
     .get(protect, admin, getMercadoPagoGatewayKeys)
     .put(protect, admin, updateMercadoPagoGatewayKeys);
 
-export default router;
+// ✅ NOVA ROTA: ImgBB
+router.route('/imgbb')
+    .get(protect, admin, getImgBBKeyStatus)
+    .put(protect, admin, updateImgBBKey);
 
+export default router;

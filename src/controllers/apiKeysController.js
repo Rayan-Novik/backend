@@ -5,12 +5,14 @@ const prisma = new PrismaClient();
 const MERCADOLIVRE_KEYS = ['MERCADO_LIVRE_APP_ID', 'MERCADO_LIVRE_SECRET_KEY', 'MERCADO_LIVRE_ACCESS_TOKEN', 'MERCADO_LIVRE_REFRESH_TOKEN'];
 const TIKTOK_KEYS = ['TIKTOK_APP_KEY', 'TIKTOK_APP_SECRET', 'TIKTOK_SHOP_ID'];
 const MERCADOPAGO_KEYS = ['MERCADOPAGO_PUBLIC_KEY', 'MERCADOPAGO_ACCESS_TOKEN'];
+const IMGBB_KEYS = ['IMGBB_API_KEY']; // ✅ NOVA LISTA
 
 // --- Funções Genéricas Auxiliares ---
 const getKeyStatus = async (keys) => {
     const settings = await prisma.configuracoes.findMany({
         where: { chave: { in: keys } },
     });
+    // Retorna true/false se a chave existe e tem valor
     const status = settings.reduce((acc, { chave, valor }) => ({ ...acc, [chave]: !!valor }), {});
     keys.forEach(key => { if (!status[key]) status[key] = false; });
     return status;
@@ -75,8 +77,6 @@ export const getMercadoPagoGatewayKeys = async (req, res, next) => {
 
 export const updateMercadoPagoGatewayKeys = async (req, res, next) => {
     try {
-        // ✅ CORREÇÃO: A lógica agora usa a função auxiliar 'updateKeys'
-        // que guarda os valores como texto puro, sem criptografia.
         await updateKeys(MERCADOPAGO_KEYS, req.body);
         res.json({ message: 'Chaves do Mercado Pago atualizadas com sucesso!' });
     } catch (error) {
@@ -84,3 +84,20 @@ export const updateMercadoPagoGatewayKeys = async (req, res, next) => {
     }
 };
 
+// --- ✅ NOVAS FUNÇÕES PARA O IMGBB ---
+export const getImgBBKeyStatus = async (req, res, next) => {
+    try {
+        res.json(await getKeyStatus(IMGBB_KEYS));
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const updateImgBBKey = async (req, res, next) => {
+    try {
+        await updateKeys(IMGBB_KEYS, req.body);
+        res.json({ message: 'Chave do ImgBB atualizada com sucesso!' });
+    } catch (error) {
+        next(error);
+    }
+};

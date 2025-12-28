@@ -4,19 +4,24 @@ import {
     getAppearanceSettings,
     updateAppearanceSettings,
     getPublicConfiguracoes,
+    getPixDiscountConfig,    // <--- Importar
+    updatePixDiscountConfig  // <--- Importar
 } from '../controllers/configuracaoController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
 
 // Rota para buscar as configurações de aparência.
-// A rota para buscar é pública, para que o seu e-commerce possa aceder.
 router.get('/appearance', getAppearanceSettings);
 
-// Esta rota não precisa de "protect" ou "admin" porque é para o e-commerce
+// Rota pública
 router.route('/public').get(getPublicConfiguracoes);
 
-// Rota para atualizar as configurações de aparência.
-// Apenas administradores podem fazer isto.
+// Rota para atualizar as configurações de aparência (Admin)
 router.put('/appearance', protect, admin, updateAppearanceSettings);
+
+// ✅ NOVA ROTA: Configurações de Desconto Pix
+router.route('/pix-desconto')
+    .get(getPixDiscountConfig) // Frontend público pode ler para mostrar "5% OFF no Pix"
+    .post(protect, admin, updatePixDiscountConfig); // Só admin altera
 
 export default router;

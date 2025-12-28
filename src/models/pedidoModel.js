@@ -14,16 +14,16 @@ export default {
         try {
             await connection.beginTransaction();
 
-            // ✅ SQL ATUALIZADO: Inclui as colunas de snapshot (entrega_...)
+            // ✅ SQL ATUALIZADO: Inclui id_cupom_utilizado
             const pedidoSql = `
                 INSERT INTO ${T_PEDIDOS} (
                     id_usuario, id_endereco_entrega, metodo_pagamento, 
                     preco_itens, preco_frete, preco_total, 
-                    status_pagamento, id_pagamento_gateway,
+                    status_pagamento, id_pagamento_gateway, id_cupom_utilizado,
                     entrega_logradouro, entrega_numero, entrega_bairro,
                     entrega_cidade, entrega_estado, entrega_cep, entrega_complemento
                 ) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             
             const [pedidoResult] = await connection.query(pedidoSql, [
@@ -35,7 +35,8 @@ export default {
                 pedidoData.preco_total,
                 pedidoData.status_pagamento,
                 pedidoData.id_pagamento_gateway,
-                // ✅ Novos valores do Snapshot
+                pedidoData.id_cupom_utilizado || null, // ✅ Novo campo
+                
                 pedidoData.entrega_logradouro,
                 pedidoData.entrega_numero,
                 pedidoData.entrega_bairro,
@@ -59,7 +60,7 @@ export default {
             await connection.query(itemsSql, [itemsValues]);
 
             await connection.commit();
-            return { id_pedido };
+            return { id_pedido, ...pedidoData }; // Retorna dados completos
         } catch (error) {
             await connection.rollback();
             throw error;
@@ -68,7 +69,7 @@ export default {
         }
     },
 
-    // ✅ FIND BY ID CORRIGIDO (Permite pedidos sem endereço vinculado)
+    // ... (o resto das funções findById, findAll, etc. continuam iguais ao que você já tinha)
     async findById(id_param, id_usuario) { 
         let pedidoSql = `
             SELECT 
@@ -77,7 +78,7 @@ export default {
                 u.nome_completo, 
                 u.email,
                 u.cpf_criptografado,
-                u.telefone_criptografado  -- ✅ NOME CORRETO DA COLUNA NO SEU BANCO
+                u.telefone_criptografado
             FROM ${T_PEDIDOS} p
             LEFT JOIN ${T_ENDERECOS} e ON p.id_endereco_entrega = e.id_endereco
             JOIN ${T_USUARIOS} u ON p.id_usuario = u.id_usuario
@@ -119,11 +120,7 @@ export default {
 
     async findAllByUserId(id_usuario) {
         const sql = `
-            SELECT 
-                id_pedido, 
-                data_pedido, 
-                preco_total, 
-                status_pagamento 
+            SELECT id_pedido, data_pedido, preco_total, status_pagamento 
             FROM ${T_PEDIDOS} 
             WHERE id_usuario = ? 
             ORDER BY data_pedido DESC

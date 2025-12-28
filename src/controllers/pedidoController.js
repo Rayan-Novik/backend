@@ -1,20 +1,32 @@
 import CarrinhoModel from '../models/carrinhoModel.js';
 import PedidoModel from '../models/pedidoModel.js';
 import EnderecoModel from '../models/enderecoModel.js';
-import { criarPagamentoPix, criarPagamentoCartao, criarPagamentoDebito } from '../services/mercadoPagoService.js'
+import CupomModel from '../models/cupomModel.js'; // ✅ Importado
+import ConfiguracaoModel from '../models/configuracaoModel.js'; // ✅ Importado
+import { criarPagamentoPix, criarPagamentoCartao, criarPagamentoDebito } from '../services/mercadoPagoService.js';
 import UsuarioModel from '../models/usuarioModel.js';
 import { decrypt } from '../services/cryptoService.js';
+import { calcularDesconto } from '../services/discountService.js'; // ✅ Importado
+import Produto from '../models/produtoModel.js'; 
+import axios from 'axios';
 
-// --- Funções de Cliente (Existentes) ---
+// --- Funções de Cliente ---
 
 export const criarPedido = async (req, res, next) => {
     try {
         const id_usuario = req.user.id_usuario;
         
         // Recebe dados do frontend
-        const { id_endereco_entrega, preco_frete = 0, paymentMethod, paymentData, dados_entrega } = req.body;
+        const { 
+            id_endereco_entrega, 
+            preco_frete = 0, 
+            paymentMethod, 
+            paymentData, 
+            dados_entrega,
+            cupom_aplicado // ✅ Recebe objeto { code: 'ABC' }
+        } = req.body;
 
-        // --- Validações ---
+        // --- Validações Básicas ---
         if (!id_endereco_entrega && Number(preco_frete) > 0) {
             return res.status(400).json({ message: "O endereço de entrega é obrigatório para entregas." });
         }
@@ -23,13 +35,14 @@ export const criarPedido = async (req, res, next) => {
         if (carrinhoItens.length === 0) {
             return res.status(400).json({ message: "Seu carrinho está vazio." });
         }
+
         const usuario = await UsuarioModel.findById(id_usuario);
         const cpfLimpo = decrypt(usuario.cpf_criptografado);
         if (!cpfLimpo) {
             return res.status(400).json({ message: "CPF do usuário não encontrado ou inválido." });
         }
 
-        // --- Cálculo de Preço ---
+        // --- 1. Cálculo de Preço dos Itens (Recalcula do zero por segurança) ---
         const preco_itens = carrinhoItens.reduce((total, item) => {
             const preco = parseFloat(item.produtos.preco);
             const quantidade = parseInt(item.quantidade, 10);
@@ -38,21 +51,80 @@ export const criarPedido = async (req, res, next) => {
             }
             return total;
         }, 0);
+
+        // --- 2. Aplicação de Cupom (Backend Validation) ---
+        let valorDescontoCupom = 0;
+        let cupomId = null;
+
+        if (cupom_aplicado && cupom_aplicado.code) {
+            const cupomDb = await CupomModel.findByCode(cupom_aplicado.code);
+            if (cupomDb) {
+                // Formata o carrinho para o serviço de desconto
+                const carrinhoFormatado = carrinhoItens.map(i => ({
+                    id_produto: i.produtos.id_produto,
+                    preco: i.produtos.preco,
+                    quantidade: i.quantidade,
+                    produto: i.produtos
+                }));
+
+                try {
+                    // Recalcula o desconto usando a mesma lógica do frontend
+                    valorDescontoCupom = calcularDesconto(carrinhoFormatado, cupomDb, Number(preco_frete));
+                    cupomId = cupomDb.id_cupom;
+                    
+                    // Incrementa uso do cupom (poderia ser feito após confirmação de pagamento, mas aqui garante a reserva)
+                    await CupomModel.incrementUsage(cupomDb.id_cupom);
+                } catch (err) {
+                    console.error("Erro ao validar cupom no backend:", err.message);
+                }
+            }
+        }
+
+        // Total parcial (Itens + Frete - Cupom)
+        let preco_total_calculado = Math.max(0, preco_itens + Number(preco_frete) - valorDescontoCupom);
+
+        // --- 3. Aplicação de Desconto PIX (COM TRAVA DE CUPOM) ---
+        let valorDescontoPix = 0;
         
-        const preco_total = preco_itens + Number(preco_frete);
-        if (preco_total <= 0) {
+        // ✅ AQUI ESTÁ A LÓGICA DE EXCLUSÃO: Só aplica Pix se não tiver cupom (cupomId é null)
+        if (paymentMethod === 'PIX' && !cupomId) {
+            const pixAtivoStr = await ConfiguracaoModel.get('pix_desconto_ativo');
+            const pixPorcentagemStr = await ConfiguracaoModel.get('pix_desconto_porcentagem');
+            
+            const pixAtivo = pixAtivoStr === 'true';
+            const pixPorcentagem = Number(pixPorcentagemStr || 0);
+
+            if (pixAtivo && pixPorcentagem > 0) {
+                valorDescontoPix = preco_total_calculado * (pixPorcentagem / 100);
+                preco_total_calculado = preco_total_calculado - valorDescontoPix;
+            }
+        }
+
+        // Preço Total Final (Arredondado para 2 casas decimais)
+        const preco_total_final = Number(preco_total_calculado.toFixed(2));
+
+        if (preco_total_final <= 0) {
             return res.status(400).json({ message: "O valor total do pedido deve ser maior que zero." });
         }
+
+        console.log(`💰 Checkout: Itens: ${preco_itens} | Frete: ${preco_frete} | Cupom: -${valorDescontoCupom} | Pix: -${valorDescontoPix} | TOTAL: ${preco_total_final}`);
 
         // --- LÓGICA DE PAGAMENTO ---
         let pagamentoResult;
         let metodoPagamentoFinal = paymentMethod;
 
+        // Dados do pagador
+        const payerInfo = {
+            email: usuario.email,
+            identification: { type: "CPF", number: cpfLimpo }
+        };
+
         if (paymentMethod === 'CreditCard') {
             const { token, installments, payment_method_id, issuer_id, payer } = paymentData;
             metodoPagamentoFinal = payment_method_id;
             pagamentoResult = await criarPagamentoCartao({
-                amount: preco_total, token, installments, payment_method_id, issuer_id,
+                amount: preco_total_final, // ✅ Usa valor com desconto correto
+                token, installments, payment_method_id, issuer_id,
                 payer: {
                     email: payer.email,
                     identification: { type: payer.identification.type, number: payer.identification.number }
@@ -63,7 +135,8 @@ export const criarPedido = async (req, res, next) => {
             const { token, payment_method_id, issuer_id, payer } = paymentData;
             metodoPagamentoFinal = payment_method_id;
             pagamentoResult = await criarPagamentoDebito({
-                amount: preco_total, token, payment_method_id, issuer_id,
+                amount: preco_total_final, // ✅ Usa valor com desconto correto
+                token, payment_method_id, issuer_id,
                 payer: {
                     email: payer.email,
                     identification: { type: payer.identification.type, number: payer.identification.number }
@@ -74,13 +147,13 @@ export const criarPedido = async (req, res, next) => {
             metodoPagamentoFinal = 'pix';
             const [primeiroNome, ...sobrenomeArray] = usuario.nome_completo.split(' ');
             const sobrenome = sobrenomeArray.join(' ');
+            
             pagamentoResult = await criarPagamentoPix({
-                amount: preco_total,
+                amount: preco_total_final, // ✅ Usa valor com desconto correto (Pix ou Cupom)
                 payer: {
-                    email: usuario.email,
+                    ...payerInfo,
                     firstName: primeiroNome,
-                    lastName: sobrenome,
-                    identification: { type: "CPF", number: cpfLimpo }
+                    lastName: sobrenome
                 },
             });
 
@@ -97,22 +170,11 @@ export const criarPedido = async (req, res, next) => {
         };
 
         if (dados_entrega) {
-            snapshotEndereco = {
-                entrega_logradouro: dados_entrega.entrega_logradouro,
-                entrega_numero: dados_entrega.entrega_numero,
-                entrega_bairro: dados_entrega.entrega_bairro,
-                entrega_cidade: dados_entrega.entrega_cidade,
-                entrega_estado: dados_entrega.entrega_estado,
-                entrega_cep: dados_entrega.entrega_cep,
-                entrega_complemento: dados_entrega.entrega_complemento
-            };
+            snapshotEndereco = { ...dados_entrega };
         }
-
         else if (id_endereco_entrega) {
             try {
-                // Busca os detalhes no banco de dados usando o ID
                 const enderecoDb = await EnderecoModel.findById(id_endereco_entrega);
-                
                 if (enderecoDb) {
                     snapshotEndereco = {
                         entrega_logradouro: enderecoDb.logradouro || enderecoDb.rua,
@@ -123,11 +185,9 @@ export const criarPedido = async (req, res, next) => {
                         entrega_cep: enderecoDb.cep,
                         entrega_complemento: enderecoDb.complemento
                     };
-                    console.log("⚠️ Snapshot recuperado via ID pelo Backend:", snapshotEndereco);
                 }
             } catch (err) {
                 console.error("Erro ao buscar endereço de backup:", err);
-                // Não trava o pedido, mas avisa no log
             }
         }
 
@@ -138,31 +198,26 @@ export const criarPedido = async (req, res, next) => {
             metodo_pagamento: metodoPagamentoFinal,
             preco_itens,
             preco_frete,
-            preco_total,
+            preco_total: preco_total_final, // ✅ Salva o valor real a ser pago
             status_pagamento: statusPagamento,
             id_pagamento_gateway: pagamentoResult.id.toString(),
+            id_cupom_utilizado: cupomId, // ✅ Salva o ID do cupom se foi usado
             ...snapshotEndereco 
         }, carrinhoItens);
 
         await CarrinhoModel.clear(id_usuario);
 
-        // ✅ INÍCIO DA NOTIFICAÇÃO EM TEMPO REAL
-        // Recupera o socket que configuramos no app.js
+        // Notificação Socket
         const io = req.app.get('socketio');
-        
         if (io) {
-            // Emite o evento 'novo_pedido' para todos os clientes conectados (Dashboard Admin/Mobile)
-            // Envia apenas dados essenciais para o alerta
             io.emit('novo_pedido', {
-                id: pedidoCriado.id_pedido || pedidoCriado.id, // Garante que pegue o ID correto
-                total: preco_total,
+                id: pedidoCriado.id_pedido || pedidoCriado.id,
+                total: preco_total_final,
                 cliente: usuario.nome_completo,
                 status: statusPagamento,
                 tipo: id_endereco_entrega ? 'Entrega' : 'Retirada'
             });
-            console.log(`🔔 Notificação enviada para o pedido #${pedidoCriado.id_pedido || pedidoCriado.id}`);
         }
-        // ✅ FIM DA NOTIFICAÇÃO EM TEMPO REAL
 
         // --- Resposta ---
         if (paymentMethod === 'CreditCard' || paymentMethod === 'DebitCard') {
@@ -175,6 +230,7 @@ export const criarPedido = async (req, res, next) => {
                 message: "Pedido criado! Aguardando pagamento PIX.",
                 pedido: pedidoCriado,
                 paymentInfo: {
+                    transaction_amount: preco_total_final, // ✅ Envia o valor correto pro frontend
                     id_pagamento: pagamentoResult.id,
                     qr_code: pagamentoResult.point_of_interaction?.transaction_data?.qr_code,
                     qr_code_base64: pagamentoResult.point_of_interaction?.transaction_data?.qr_code_base64,
@@ -183,31 +239,21 @@ export const criarPedido = async (req, res, next) => {
         }
 
     } catch (error) {
+        console.error("Erro no criarPedido:", error);
         next(error);
     }
 };
 
 export const getPedidoById = async (req, res, next) => {
     try {
-        console.log('--- DIAGNÓSTICO: INÍCIO getPedidoById ---');
-
-        // 1. O que a URL está a enviar?
-        console.log('ID do pedido recebido (req.params.id):', req.params.id);
         const id_pedido = Number(req.params.id);
-
-        // 2. Quem está a fazer a requisição? O token está correto?
-        console.log('Dados do usuário do token (req.user):', req.user);
         const id_usuario_logado = req.user.id_usuario;
         const is_admin_logado = req.user.isAdmin;
-        console.log('O usuário é admin?', is_admin_logado);
 
         const pedidoCompleto = await PedidoModel.findById(
             id_pedido,
             is_admin_logado ? undefined : id_usuario_logado
         );
-
-        console.log('Resultado da busca no banco:', pedidoCompleto ? 'Pedido encontrado' : 'Pedido NÃO encontrado');
-        console.log('--- DIAGNÓSTICO: FIM getPedidoById ---');
 
         if (pedidoCompleto) {
             res.status(200).json(pedidoCompleto);
@@ -222,8 +268,7 @@ export const getPedidoById = async (req, res, next) => {
 export const getMeusPedidos = async (req, res, next) => {
     try {
         const id_usuario = req.user.id_usuario;
-        // Agora chama a função correta do Model para buscar todos os pedidos do usuário
-        const pedidos = await PedidoModel.findAllByUserId(id_usuario); // Correto!
+        const pedidos = await PedidoModel.findAllByUserId(id_usuario);
         res.status(200).json(pedidos);
     } catch (error) {
         next(error);
@@ -244,15 +289,13 @@ export const getAllPedidos = async (req, res, next) => {
 export const updatePedidoParaEntregue = async (req, res, next) => {
     try {
         const pedido = await PedidoModel.findById(Number(req.params.id), undefined);
-
         if (pedido) {
             const pedidoAtualizado = await PedidoModel.update(Number(req.params.id), {
                 status_entrega: 'Enviado'
             });
             res.json(pedidoAtualizado);
         } else {
-            res.status(404);
-            throw new Error('Pedido não encontrado');
+            res.status(404).json({ message: 'Pedido não encontrado' });
         }
     } catch (error) {
         next(error);
@@ -262,19 +305,13 @@ export const updatePedidoParaEntregue = async (req, res, next) => {
 export const updatePedidoStatus = async (req, res, next) => {
     try {
         const id_pedido = Number(req.params.id);
-        const { status_entrega } = req.body; // Recebe 'Pronto para Retirada', 'Entregue', etc.
-
+        const { status_entrega } = req.body;
         const pedido = await PedidoModel.findById(id_pedido);
-
         if (pedido) {
-            const pedidoAtualizado = await PedidoModel.update(id_pedido, {
-                status_entrega: status_entrega
-            });
-            
+            const pedidoAtualizado = await PedidoModel.update(id_pedido, { status_entrega });
             res.json(pedidoAtualizado);
         } else {
-            res.status(404);
-            throw new Error('Pedido não encontrado');
+            res.status(404).json({ message: 'Pedido não encontrado' });
         }
     } catch (error) {
         next(error);
@@ -290,39 +327,28 @@ export const deletePedido = async (req, res, next) => {
     }
 };
 
-
 export const publishToMercadoLivre = async (req, res, next) => {
     try {
         const { id: productId } = req.params;
         const produto = await Produto.findById(Number(productId));
 
-        if (!produto) {
-            return res.status(404).json({ message: 'Produto não encontrado.' });
-        }
-        if (produto.mercado_livre_id) {
-            return res.status(400).json({ message: 'Este produto já foi publicado no Mercado Livre.' });
-        }
+        if (!produto) return res.status(404).json({ message: 'Produto não encontrado.' });
+        if (produto.mercado_livre_id) return res.status(400).json({ message: 'Este produto já foi publicado no Mercado Livre.' });
 
         const accessToken = await ConfiguracaoModel.get('MERCADO_LIVRE_ACCESS_TOKEN');
-        if (!accessToken) {
-            return res.status(500).json({ message: 'Access Token do Mercado Livre não configurado.' });
-        }
+        if (!accessToken) return res.status(500).json({ message: 'Access Token do Mercado Livre não configurado.' });
 
         const anuncio = {
             title: produto.nome,
-            category_id: "MLB1652", // Exemplo: Categoria de Notebooks
+            category_id: "MLB1652",
             price: parseFloat(produto.preco),
             currency_id: "BRL",
             available_quantity: produto.estoque,
             buying_mode: "buy_it_now",
             listing_type_id: "gold_special",
             condition: "new",
-            description: {
-                plain_text: produto.descricao
-            },
-            pictures: [
-                { source: produto.imagem_url }
-            ]
+            description: { plain_text: produto.descricao },
+            pictures: [{ source: produto.imagem_url }]
         };
 
         const { data } = await axios.post('https://api.mercadolibre.com/items', anuncio, {
@@ -333,7 +359,6 @@ export const publishToMercadoLivre = async (req, res, next) => {
         });
 
         await Produto.update(produto.id_produto, { mercado_livre_id: data.id });
-
         res.json({ message: 'Produto publicado com sucesso!', url: data.permalink });
 
     } catch (error) {
