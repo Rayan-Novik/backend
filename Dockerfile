@@ -1,7 +1,14 @@
-FROM node:18-alpine
+FROM node:18
+
 WORKDIR /app
+
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --legacy-peer-deps
+
 COPY . .
+
+# Prisma Client
+RUN npx prisma generate --schema=src/prisma/schema.prisma
+
 EXPOSE 5000
-CMD ["node", "src/server.js"]
+CMD ["npm", "start"]

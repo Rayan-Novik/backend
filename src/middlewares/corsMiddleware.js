@@ -6,6 +6,7 @@ const allowedOrigins = [
   "https://back.ecommercerpool.shop",
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:5000",
   "http://192.168.100.14:3000",
   "http://192.168.100.14:3001",
 ];
