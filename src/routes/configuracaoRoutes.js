@@ -5,7 +5,9 @@ import {
     updateAppearanceSettings,
     getPublicConfiguracoes,
     getPixDiscountConfig,    // <--- Importar
-    updatePixDiscountConfig  // <--- Importar
+    updatePixDiscountConfig,  // <--- Importar
+    getHomepageLayout,
+    updateHomepageLayout
 } from '../controllers/configuracaoController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
@@ -24,4 +26,7 @@ router.route('/pix-desconto')
     .get(getPixDiscountConfig) // Frontend público pode ler para mostrar "5% OFF no Pix"
     .post(protect, admin, updatePixDiscountConfig); // Só admin altera
 
+router.route('/homepage-layout')
+    .get(getHomepageLayout)
+    .post(protect, admin, updateHomepageLayout);   
 export default router;

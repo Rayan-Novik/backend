@@ -13,7 +13,16 @@ const PLAINTEXT_KEYS = [
     'pix_desconto_porcentagem',
     'SITE_TITLE',
     'FAVICON_URL',
-    'IMGBB_API_KEY'   // <--- ADICIONADO AQUI!
+    'IMGBB_API_KEY',
+    'HOMEPAGE_LAYOUT',
+    // ✅ NOVAS CHAVES DE CORES ADICIONADAS AQUI
+    'BODY_BG_COLOR',
+    'SITE_TEXT_COLOR',
+    'BTN_PRIMARY_BG',
+    'BTN_PRIMARY_TEXT',
+    'HEADER_PRIMARY_COLOR',
+    'HEADER_SECONDARY_COLOR',
+    'FOOTER_COLOR'
 ];
 
 const ConfiguracaoModel = {     

@@ -14,7 +14,6 @@ export default {
         try {
             await connection.beginTransaction();
 
-            // ✅ SQL ATUALIZADO: Inclui id_cupom_utilizado
             const pedidoSql = `
                 INSERT INTO ${T_PEDIDOS} (
                     id_usuario, id_endereco_entrega, metodo_pagamento, 
@@ -25,7 +24,7 @@ export default {
                 ) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
-            
+
             const [pedidoResult] = await connection.query(pedidoSql, [
                 pedidoData.id_usuario,
                 pedidoData.id_endereco_entrega,
@@ -35,8 +34,8 @@ export default {
                 pedidoData.preco_total,
                 pedidoData.status_pagamento,
                 pedidoData.id_pagamento_gateway,
-                pedidoData.id_cupom_utilizado || null, // ✅ Novo campo
-                
+                pedidoData.id_cupom_utilizado || null,
+
                 pedidoData.entrega_logradouro,
                 pedidoData.entrega_numero,
                 pedidoData.entrega_bairro,
@@ -45,22 +44,22 @@ export default {
                 pedidoData.entrega_cep,
                 pedidoData.entrega_complemento
             ]);
-            
+
             const id_pedido = pedidoResult.insertId;
 
             const itemsSql = `INSERT INTO ${T_PEDIDO_ITEMS} (id_pedido, id_produto, nome, quantidade, preco, imagem_url) VALUES ?`;
             const itemsValues = itemsData.map(item => [
-                id_pedido, 
-                item.produtos.id_produto, 
-                item.produtos.nome, 
-                item.quantidade, 
-                parseFloat(item.produtos.preco), 
+                id_pedido,
+                item.produtos.id_produto,
+                item.produtos.nome,
+                item.quantidade,
+                parseFloat(item.produtos.preco),
                 item.produtos.imagem_url
             ]);
             await connection.query(itemsSql, [itemsValues]);
 
             await connection.commit();
-            return { id_pedido, ...pedidoData }; // Retorna dados completos
+            return { id_pedido, ...pedidoData };
         } catch (error) {
             await connection.rollback();
             throw error;
@@ -69,8 +68,76 @@ export default {
         }
     },
 
-    // ... (o resto das funções findById, findAll, etc. continuam iguais ao que você já tinha)
-    async findById(id_param, id_usuario) { 
+    /**
+     * ✅ NOVA FUNÇÃO: updateStatusByGatewayId
+     * Esta função é chamada pelo Webhook do Mercado Pago.
+     * Ela atualiza o status de pagamento e, se pago, avança o status de entrega.
+     */
+    async updateStatusByGatewayId(gatewayId, status) {
+        const connection = await db.getConnection();
+        try {
+            await connection.beginTransaction();
+
+            // 1. Verificar o status atual antes de atualizar (para evitar baixar estoque duplicado)
+            const [pedidoRows] = await connection.query(
+                `SELECT id_pedido, status_pagamento FROM ${T_PEDIDOS} WHERE id_pagamento_gateway = ?`,
+                [gatewayId]
+            );
+            const pedidoAnterior = pedidoRows[0];
+
+            if (!pedidoAnterior) return false;
+
+            // Se o novo status for PAGO e o antigo não era PAGO, damos baixa
+            if (status === 'PAGO' && pedidoAnterior.status_pagamento !== 'PAGO') {
+                // Buscar itens do pedido
+                const [items] = await connection.query(
+                    `SELECT id_produto, quantidade FROM ${T_PEDIDO_ITEMS} WHERE id_pedido = ?`,
+                    [pedidoAnterior.id_pedido]
+                );
+
+                // Atualizar estoque de cada produto (usando a tabela que você deve ter, ex: 'produtos')
+                for (const item of items) {
+                    await connection.query(
+                        `UPDATE produtos SET estoque = estoque - ? WHERE id_produto = ?`,
+                        [item.quantidade, item.id_produto]
+                    );
+                }
+            }
+
+            // 2. Atualizar o status do pedido
+            const sqlUpdate = `
+            UPDATE ${T_PEDIDOS} 
+            SET status_pagamento = ?, 
+                status_entrega = CASE WHEN ? = 'PAGO' THEN 'Em processamento' ELSE status_entrega END
+            WHERE id_pagamento_gateway = ?
+        `;
+            const [result] = await connection.query(sqlUpdate, [status, status, gatewayId]);
+
+            await connection.commit();
+            return result.affectedRows > 0;
+        } catch (error) {
+            await connection.rollback();
+            throw error;
+        } finally {
+            connection.release();
+        }
+    },
+
+    async cancelarPedidosExpirados() {
+        // Busca pedidos pendentes criados há mais de 1 hora
+        // 'data_pedido' deve ser o nome da sua coluna de timestamp
+        const sql = `
+        UPDATE ${T_PEDIDOS}
+        SET status_pagamento = 'CANCELADO',
+            status_entrega = 'Cancelado por expiração'
+        WHERE status_pagamento = 'PENDENTE'
+          AND data_pedido < DATE_SUB(NOW(), INTERVAL 1 HOUR)
+    `;
+        const [result] = await db.query(sql);
+        return result.affectedRows;
+    },
+
+    async findById(id_param, id_usuario) {
         let pedidoSql = `
             SELECT 
                 p.*, 
@@ -84,7 +151,7 @@ export default {
             JOIN ${T_USUARIOS} u ON p.id_usuario = u.id_usuario
             WHERE (p.id_pedido = ? OR p.id_pagamento_gateway = ?)
         `;
-        
+
         const params = [id_param, id_param];
 
         if (id_usuario) {
@@ -95,16 +162,14 @@ export default {
         const [pedidoRows] = await db.query(pedidoSql, params);
         const pedido = pedidoRows[0];
 
-        if (!pedido) {
-            return null;
-        }
+        if (!pedido) return null;
 
         const itemsSql = `SELECT * FROM ${T_PEDIDO_ITEMS} WHERE id_pedido = ?`;
         const [items] = await db.query(itemsSql, [pedido.id_pedido]);
 
         return {
             pedido: pedido,
-            cliente: pedido, 
+            cliente: pedido,
             endereco: pedido.id_endereco ? pedido : {
                 logradouro: pedido.entrega_logradouro,
                 numero: pedido.entrega_numero,
@@ -155,7 +220,7 @@ export default {
         const [result] = await db.query(sql, [id_pedido]);
         return result;
     },
-    
+
     async count() {
         const sql = `SELECT COUNT(*) as total FROM ${T_PEDIDOS}`;
         const [rows] = await db.query(sql);
@@ -177,7 +242,7 @@ export default {
             totalPendente: parseFloat(data.totalPendente) || 0,
         };
     },
-    
+
     async getSalesOverTime() {
         const sql = `
             SELECT
@@ -192,7 +257,7 @@ export default {
         const [rows] = await db.query(sql);
         return rows;
     },
-    
+
     async findMany(options) {
         const sql = `
             SELECT p.*, u.nome_completo 
@@ -203,12 +268,6 @@ export default {
         `;
         const [rows] = await db.query(sql, [options.take]);
         return rows.map(row => ({ ...row, usuarios: { nome_completo: row.nome_completo } }));
-    },
-
-    async updatePaymentStatusByGatewayId(gatewayId, status) {
-        const sql = `UPDATE ${T_PEDIDOS} SET status_pagamento = ? WHERE id_pagamento_gateway = ?`;
-        const [result] = await db.query(sql, [status, gatewayId]);
-        return result;
     },
 
     async findByAddressId(id_endereco) {

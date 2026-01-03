@@ -3,6 +3,9 @@ import { getValidAccessToken } from '../services/mercadoLivreService.js';
 import Categoria from '../models/categoriaModel.js';
 import axios from 'axios';
 
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
 // ============================================================================
 //                              ROTAS PÚBLICAS
 // ============================================================================
@@ -67,7 +70,43 @@ export const getProdutoById = async (req, res, next) => {
             return res.status(404).json({ message: 'Produto não encontrado.' });
         }
 
-        await Produto.incrementView(productId);
+        // ============================================================
+        // ✅ ATUALIZAÇÃO: REGISTRAR VISUALIZAÇÃO NO HISTÓRICO
+        // ============================================================
+        try {
+            const hoje = new Date();
+            // Zera a hora para garantir que agrupe tudo no mesmo dia (00:00:00)
+            hoje.setUTCHours(0, 0, 0, 0); 
+
+            // 1. Salva na tabela nova (Histórico por dia)
+            await prisma.produto_visualizacoes.upsert({
+                where: {
+                    // ❌ ANTES (ERRADO): uk_produto_data
+                    // ✅ AGORA (CORRETO): id_produto_data
+                    id_produto_data: { 
+                        id_produto: productId,
+                        data: hoje
+                    }
+                },
+                update: { 
+                    quantidade: { increment: 1 }
+                },
+                create: { 
+                    id_produto: productId, 
+                    data: hoje, 
+                    quantidade: 1
+                }
+            });
+
+            // 2. Mantém o contador total na tabela de produtos (para ordenação geral)
+            // (Esta linha chama a função que já existia no seu Model)
+            await Produto.incrementView(productId);
+
+        } catch (viewError) {
+            // Se der erro no log de view, apenas avisa no console e não trava o site
+            console.error("Erro silencioso ao registrar visualização:", viewError.message);
+        }
+        // ============================================================
 
         res.status(200).json(produto);
     } catch (error) {
@@ -176,10 +215,13 @@ export const getPopularProdutos = async (req, res, next) => {
 
 export const createProduto = async (req, res, next) => {
     try {
-        // 1. Extraímos id_subcategoria junto com os outros IDs
         const { 
-            id_categoria, id_subcategoria, id_marca, subimagens = [], 
-            active_ecommerce, // 👈 ✅ NOVO CAMPO: Captura do frontend
+            id_categoria, 
+            id_subcategoria, 
+            id_marca, 
+            id_fornecedor, // 👈 Captura o ID do fornecedor
+            subimagens = [], 
+            active_ecommerce,
             ...productData 
         } = req.body;
 
@@ -196,19 +238,24 @@ export const createProduto = async (req, res, next) => {
             comprimento: Number(productData.comprimento),
             altura: Number(productData.altura),
             largura: Number(productData.largura),
+            preco_custo: productData.preco_custo ? Number(productData.preco_custo) : 0,
             
-            // ✅ ATUALIZAÇÃO: Define o status (padrão true se não enviado)
             active_ecommerce: active_ecommerce !== undefined ? Boolean(active_ecommerce) : true,
 
-            // Conexão com Categoria (Obrigatório)
+            // Conexão com Categoria
             categorias: {
                 connect: { id_categoria: Number(id_categoria) }
             },
-            // Conexão com Marca (Obrigatório)
+            // Conexão com Marca
             marcas: {
                 connect: { id_marca: Number(id_marca) }
             },
-            // Conexão com Subcategoria (Opcional)
+            // ✅ CONEXÃO COM FORNECEDOR (Tratado como relação)
+            fornecedores: id_fornecedor ? {
+                connect: { id_fornecedor: Number(id_fornecedor) }
+            } : undefined,
+
+            // Conexão com Subcategoria
             subcategorias: id_subcategoria ? {
                 connect: { id_subcategoria: Number(id_subcategoria) }
             } : undefined,
@@ -232,8 +279,10 @@ export const createProduto = async (req, res, next) => {
 export const updateProduto = async (req, res, next) => {
     try {
         const { 
-            id_categoria, id_subcategoria, id_marca, id_produto, subimagens = [], 
-            active_ecommerce, // 👈 ✅ NOVO CAMPO: Captura do frontend
+            id_categoria, id_subcategoria, id_marca, id_produto, 
+            id_fornecedor, // 👈 ✅ NOVO CAMPO: Capturado para vincular ao fornecedor
+            subimagens = [], 
+            active_ecommerce, 
             ...productData 
         } = req.body;
         
@@ -261,6 +310,12 @@ export const updateProduto = async (req, res, next) => {
             marcas: id_marca ? { 
                 connect: { id_marca: Number(id_marca) } 
             } : undefined,
+
+            // ✅ NOVO: Lógica para Fornecedor
+            // Se vier um ID, conecta. Se vier explicitamente null, desconecta.
+            fornecedores: id_fornecedor 
+                ? { connect: { id_fornecedor: Number(id_fornecedor) } } 
+                : (id_fornecedor === null ? { disconnect: true } : undefined),
 
             // Lógica de Troca de Subcategoria
             subcategorias: id_subcategoria 

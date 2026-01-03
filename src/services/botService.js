@@ -1,132 +1,130 @@
 import cron from 'node-cron';
 import { PrismaClient } from '@prisma/client';
-import { sendAbandonedCartEmail, sendPendingPaymentEmail } from './emailService.js';
+import { sendAbandonedCartEmail, sendPendingPaymentEmail } from './emailService.js'; 
 
 const prisma = new PrismaClient();
 
 // --- Tarefas Agendadas ---
 
-// 1. Lembrete de Carrinho Abandonado
-// ✅ Adicionado 'export' para que o botController possa usar esta função para testes.
+/**
+ * 1. Lembrete de Carrinho Abandonado
+ * Regra: Carrinhos criados entre 2 e 24 horas atrás.
+ */
 export const handleAbandonedCarts = async () => {
-    console.log('🤖 Verificando carrinhos abandonados...');
+    console.log('🤖 Bot: Verificando carrinhos abandonados...');
     
-    // Procura por carrinhos criados entre 2 e 24 horas atrás para não incomodar o cliente
-    // Para testar, você pode descomentar as linhas de minutos e comentar as de horas.
-    // const twoMinutesAgo = new Date(new Date().getTime() - (2 * 60 * 1000));
-    // const oneHourAgo = new Date(new Date().getTime() - (60 * 60 * 1000));
+    // Intervalo de tempo (janela de 2h a 24h atrás)
     const twoHoursAgo = new Date(new Date().getTime() - (2 * 60 * 60 * 1000));
     const twentyFourHoursAgo = new Date(new Date().getTime() - (24 * 60 * 60 * 1000));
 
-    const abandonedCarts = await prisma.carrinhos.findMany({
-        where: {
-            data_adicionado: {
-                lt: twoHoursAgo, // Use twoMinutesAgo para testar
-                gte: twentyFourHoursAgo, // Use oneHourAgo para testar
+    try {
+        const abandonedCarts = await prisma.carrinhos.findMany({
+            where: {
+                data_adicionado: {
+                    lt: twoHoursAgo,
+                    gte: twentyFourHoursAgo,
+                },
             },
-        },
-        include: {
-            usuarios: true,
-            produtos: {
-                include: {
-                    imagens: { take: 1, orderBy: { ordem: 'asc' } }
+            include: {
+                usuarios: true,
+                produtos: {
+                    include: {
+                        // ✅ CORREÇÃO AQUI:
+                        // O nome correto no seu schema é 'produto_subimagens', não 'imagens'.
+                        // O 'imagem_url' (capa principal) já vem por padrão dentro de 'produtos'.
+                        produto_subimagens: { 
+                            take: 1, 
+                            orderBy: { ordem: 'asc' },
+                            select: { url: true } // Traz apenas a URL para ficar leve
+                        }
+                    }
                 }
             }
-        }
-    });
-
-    if (abandonedCarts.length > 0) {
-        console.log(`Encontrados ${abandonedCarts.length} carrinhos para notificar.`);
-        const userCarts = {};
-        abandonedCarts.forEach(item => {
-            if (!userCarts[item.id_usuario]) {
-                userCarts[item.id_usuario] = { user: item.usuarios, items: [] };
-            }
-            userCarts[item.id_usuario].items.push(item.produtos);
         });
 
-        for (const userId in userCarts) {
-            const { user, items } = userCarts[userId];
-            await sendAbandonedCartEmail(user, items);
-        }
-    }
-};
+        if (abandonedCarts.length > 0) {
+            console.log(`📦 Encontrados ${abandonedCarts.length} itens em carrinhos abandonados.`);
+            
+            // Agrupa os itens por usuário
+            const userCarts = {};
+            
+            abandonedCarts.forEach(item => {
+                // Segurança: Se o usuário foi deletado, ignora
+                if (!item.usuarios) return; 
 
-// 2. Lembrete de Pagamento Pendente ou Recusado
-// ✅ Adicionado 'export' para que o botController possa usar esta função para testes.
-export const handlePendingPayments = async () => {
-    console.log('🤖 Verificando pagamentos pendentes ou recusados...');
-    const fortyEightHoursAgo = new Date(new Date().getTime() - (48 * 60 * 60 * 1000));
-
-    const pendingOrders = await prisma.pedidos.findMany({
-        where: {
-            status_pagamento: {
-                in: ['PENDENTE', 'REJEITADO'],
-            },
-            data_pedido: {
-                gte: fortyEightHoursAgo
-            }
-        },
-        include: {
-            usuarios: true
-        }
-    });
-
-    if (pendingOrders.length > 0) {
-        console.log(`Encontrados ${pendingOrders.length} pedidos pendentes/recusados para notificar.`);
-        for (const order of pendingOrders) {
-            await sendPendingPaymentEmail(order.usuarios, order);
-        }
-    }
-};
-
-// 3. Lembrete de Produtos Vistos Recentemente (Sugestão)
-const handlePopularProductsReminder = async () => {
-    console.log('🤖 Verificando usuários para enviar lembrete de produtos populares...');
-    
-    const sevenDaysAgo = new Date(new Date().getTime() - (7 * 24 * 60 * 60 * 1000));
-
-    // Pega usuários que não compram há algum tempo
-    const inactiveUsers = await prisma.usuarios.findMany({
-        where: {
-            pedidos: {
-                none: {
-                    data_pedido: { gte: sevenDaysAgo }
+                if (!userCarts[item.id_usuario]) {
+                    userCarts[item.id_usuario] = { user: item.usuarios, items: [] };
                 }
-            },
-            isAdmin: false,
-        }
-    });
-    
-    // Pega os 5 produtos mais vistos
-    const popularProducts = await prisma.produtos.findMany({
-        orderBy: { visualizacoes: 'desc' },
-        take: 5,
-        include: {
-            imagens: { take: 1, orderBy: { ordem: 'asc' } }
-        }
-    });
+                userCarts[item.id_usuario].items.push(item.produtos);
+            });
 
-    // Esta lógica pode ser ativada no futuro
-    // if (inactiveUsers.length > 0 && popularProducts.length > 0) {
-    //     for (const user of inactiveUsers) {
-    //         // Enviar email com produtos populares
-    //     }
-    // }
+            // Envia um e-mail único por usuário
+            for (const userId in userCarts) {
+                const { user, items } = userCarts[userId];
+                console.log(`✉️ Enviando lembrete de carrinho para: ${user.email}`);
+                await sendAbandonedCartEmail(user, items);
+            }
+        } else {
+            console.log('🤖 Nenhum carrinho abandonado encontrado neste ciclo.');
+        }
+    } catch (error) {
+        console.error('❌ Erro Crítico no Bot de Carrinho:', error);
+    }
 };
-
 
 /**
- * A função principal que inicia o bot.
- * Ela agenda as tarefas para rodarem em intervalos definidos.
+ * 2. Lembrete de Pagamento Pendente
+ * Regra: Pedidos feitos há mais de 48h que ainda não foram pagos.
  */
-export const startBot = () => {
-    console.log('✅ Bot de Vendas iniciado. As tarefas serão executadas nos horários agendados.');
+export const handlePendingPayments = async () => {
+    console.log('🤖 Bot: Verificando pagamentos pendentes...');
+    
+    // Pedidos mais antigos que 48 horas
+    const fortyEightHoursAgo = new Date(new Date().getTime() - (48 * 60 * 60 * 1000));
 
-    // Agenda a verificação de carrinhos abandonados para rodar a cada hora.
-    cron.schedule('30 * * * *', handleAbandonedCarts);
+    try {
+        const pendingOrders = await prisma.pedidos.findMany({
+            where: {
+                status_pagamento: {
+                    in: ['PENDENTE', 'REJEITADO'],
+                },
+                data_pedido: {
+                    gte: fortyEightHoursAgo 
+                }
+            },
+            include: {
+                usuarios: true
+                // Não precisamos incluir produtos aqui pois o e-mail de pagamento pendente 
+                // geralmente foca no VALOR TOTAL e no LINK DE PAGAMENTO.
+            }
+        });
 
-    // Agenda a verificação de pagamentos pendentes para rodar duas vezes ao dia
-    cron.schedule('0 10,18 * * *', handlePendingPayments);
+        if (pendingOrders.length > 0) {
+            console.log(`💸 Encontrados ${pendingOrders.length} pedidos com pagamento pendente.`);
+            
+            for (const order of pendingOrders) {
+                if (order.usuarios) {
+                    console.log(`✉️ Enviando lembrete de pagamento para: ${order.usuarios.email}`);
+                    await sendPendingPaymentEmail(order.usuarios, order);
+                }
+            }
+        } else {
+            console.log('🤖 Nenhum pagamento pendente crítico encontrado.');
+        }
+    } catch (error) {
+        console.error('❌ Erro Crítico no Bot de Pagamentos:', error);
+    }
 };
 
+/**
+ * Função Principal que Inicia o Agendamento (CRON)
+ */
+export const startBot = () => {
+    console.log('✅ Bot de Vendas iniciado. Cron Jobs ativos.');
+
+    // Agenda: Carrinhos Abandonados -> Roda todo minuto 30 de cada hora
+    cron.schedule('30 * * * *', handleAbandonedCarts);
+
+    // Agenda: Pagamentos Pendentes -> Roda às 10:00 e às 18:00 todos os dias
+    cron.schedule('0 10,18 * * *', handlePendingPayments);
+};

@@ -30,8 +30,17 @@ import heroBannerRoutes from './heroBannerRoutes.js'
 import lojaRoutes from './lojaRoutes.js';
 import cupomRoutes from './cupomRoutes.js';
 import footerRoutes from './footerRoutes.js';
+import emailSettingsRoutes from './emailSettingsRoutes.js';
+import marketingRoutes from './marketingRoutes.js'; 
+import publicRoutes from './publicRoutes.js';
+import fornecedorRoutes from './fornecedorRoutes.js';
 
 const router = express.Router();
+
+// ✅ Rota raiz do index (Resolve o erro "Rota não encontrada - /api")
+router.get('/', (req, res) => {
+    res.json({ message: "API Gateway Online" });
+});
 
 // Rotas existentes
 router.use('/produtos', produtoRoutes);
@@ -66,7 +75,10 @@ router.use('/hero-banner', heroBannerRoutes);
 router.use('/integracao', integrationRoutes);
 router.use('/cupons', cupomRoutes);
 router.use('/footer', footerRoutes);
-
+router.use('/config', emailSettingsRoutes);
+router.use('/marketing', marketingRoutes);
+router.use('/public', publicRoutes);
+router.use('/fornecedores', fornecedorRoutes);
 
 
 export default router;

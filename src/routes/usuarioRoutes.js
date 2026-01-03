@@ -12,7 +12,10 @@ import {
     searchUsuarios,
     // --- IMPORTAR AS NOVAS FUNÇÕES AQUI ---
     updateUsuarioByAdmin, 
-    deleteUsuario
+    deleteUsuario,
+    googleLogin,
+    getGoogleClientId,
+    updateGoogleClientId
 } from '../controllers/usuarioController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
@@ -27,6 +30,10 @@ router.post('/', registrarUsuario);
 router.post('/login', loginUsuario);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
+router.post('/google-login', googleLogin);
+
+router.get('/google-client-id', getGoogleClientId);
+
 
 // =================================================
 // ROTA DO PERFIL (Usuário logado edita a si mesmo)
@@ -39,6 +46,9 @@ router
 // =================================================
 // ROTAS DE ADMINISTRADOR
 // =================================================
+
+
+router.put('/google-client-id', protect, admin, updateGoogleClientId);
 
 // Buscas e Cadastro via PDV
 router.get('/search/:term', protect, admin, searchUsuarios);

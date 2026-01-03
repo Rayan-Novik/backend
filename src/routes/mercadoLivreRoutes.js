@@ -1,6 +1,6 @@
 // routes/mercadoLivreRoutes.js
 import express from 'express';
-import { getCategoryAttributes, getCategoryDetails, getMainCategories, getSellerOrders, getSellerOrderById, uploadInvoice} from '../controllers/mercadoLivreController.js';
+import { getCategoryAttributes, getCategoryDetails, getMainCategories, getSellerOrders, getSellerOrderById, uploadInvoice, getMlQuestions, answerQuestion,} from '../controllers/mercadoLivreController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
 import multer from 'multer';
@@ -14,6 +14,9 @@ router.route('/attributes/:categoryId').get(protect, admin, getCategoryAttribute
 
 router.route('/categories').get(protect, admin, getMainCategories);
 router.route('/categories/:id').get(protect, admin, getCategoryDetails);
+
+router.route('/questions').get(protect, admin, getMlQuestions);
+router.route('/questions/answer').post(protect, admin, answerQuestion);
 
 router.route('/orders').get(protect, admin, getSellerOrders);
 router.route('/orders/:id').get(protect, admin, getSellerOrderById);

@@ -1,9 +1,34 @@
 import Usuario from '../models/usuarioModel.js';
+import ConfiguracaoModel from '../models/configuracaoModel.js';
 import generateToken from '../utils/generateToken.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { encrypt, decrypt } from '../services/cryptoService.js';
 import { sendPasswordResetEmail } from '../services/emailService.js';
+import { OAuth2Client } from 'google-auth-library';
+
+export const getGoogleClientId = async (req, res, next) => {
+    try {
+        const clientId = await ConfiguracaoModel.get('GOOGLE_CLIENT_ID');
+        res.json({ clientId: clientId || '' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Salva o Client ID do Google (ADMIN - Usado no Painel de Configurações)
+export const updateGoogleClientId = async (req, res, next) => {
+    try {
+        const { clientId } = req.body;
+        
+        // Salva ou atualiza no banco
+        await ConfiguracaoModel.set('GOOGLE_CLIENT_ID', clientId);
+        
+        res.json({ message: 'Google Client ID atualizado com sucesso!' });
+    } catch (error) {
+        next(error);
+    }
+};
 
 // @desc    Buscar todos os usuários (Admin)
 export const getAllUsuarios = async (req, res, next) => {
@@ -194,6 +219,88 @@ export const loginUsuario = async (req, res, next) => {
 
     } catch (error) {
         console.error("ERRO NO LOGIN:", error.message);
+        next(error);
+    }
+};
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+export const googleLogin = async (req, res, next) => {
+    try {
+        // O frontend agora envia o 'token' (que é o Access Token)
+        const { token, email, nome } = req.body;
+
+        // ==================================================================
+        // 🔴 REMOVA O CÓDIGO ANTIGO QUE USAVA client.verifyIdToken
+        // ==================================================================
+
+        // ✅ NOVA VERIFICAÇÃO:
+        // Usamos o Access Token para perguntar ao Google quem é o dono desse token.
+        // O Node.js v18+ já tem o 'fetch' nativo.
+        const response = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${token}`);
+        
+        // Se o token for inválido ou expirado, o Google retorna erro
+        if (!response.ok) {
+            res.status(401);
+            throw new Error('Token do Google inválido ou expirado.');
+        }
+
+        const googleData = await response.json();
+
+        // SEGURANÇA: Verificamos se o e-mail retornado pelo Google é o mesmo que o frontend mandou
+        if (googleData.email !== email) {
+            res.status(401);
+            throw new Error('Inconsistência nos dados de autenticação (E-mail não confere).');
+        }
+
+        // ==================================================================
+        // A PARTIR DAQUI, A LÓGICA DE LOGIN/CRIAÇÃO CONTINUA A MESMA
+        // ==================================================================
+
+        let usuario = await Usuario.findByEmail(email);
+
+        if (usuario) {
+            // --- LOGIN: Usuário já existe ---
+            res.json({
+                id_usuario: usuario.id_usuario,
+                nome_completo: usuario.nome_completo,
+                email: usuario.email,
+                token: generateToken(usuario.id_usuario),
+                isAdmin: usuario.isAdmin,
+                role: usuario.role
+            });
+        } else {
+            // --- REGISTRO: Usuário novo ---
+            // Gera senha aleatória pois ele entrou via Google
+            const senhaAleatoria = crypto.randomBytes(16).toString('hex');
+            const salt = await bcrypt.genSalt(10);
+            const senhaHasheada = await bcrypt.hash(senhaAleatoria, salt);
+
+            // Cria o usuário (Se possível, salve também o googleId se tiver coluna no banco)
+            const novoUsuario = await Usuario.create({
+                nome: nome,
+                email: email,
+                senhaHasheada: senhaHasheada
+            });
+
+            if (novoUsuario) {
+                res.status(201).json({
+                    id_usuario: novoUsuario.id_usuario,
+                    nome_completo: novoUsuario.nome_completo,
+                    email: novoUsuario.email,
+                    token: generateToken(novoUsuario.id_usuario),
+                    isAdmin: false,
+                    role: 'CLIENTE'
+                });
+            } else {
+                res.status(400);
+                throw new Error('Não foi possível criar o usuário com o Google.');
+            }
+        }
+
+    } catch (error) {
+        // Log para ajudar a debugar se der erro de novo
+        console.error("Erro no Google Login Backend:", error.message);
         next(error);
     }
 };

@@ -101,3 +101,44 @@ export const updateImgBBKey = async (req, res, next) => {
         next(error);
     }
 };
+
+export const getFacebookKeys = async (req, res) => {
+    try {
+        const chaves = await prisma.configuracoes.findMany({
+            where: {
+                chave: { in: ['FB_PIXEL_ID', 'FB_PAGE_ID', 'FB_PAGE_TOKEN', 'FB_CATALOG_ID', 'FB_AD_ACCOUNT_ID'] }
+            }
+        });
+
+        // Converte o array do banco em um objeto amigável para o Frontend
+        const keysObj = {};
+        chaves.forEach(item => {
+            keysObj[item.chave] = item.valor;
+        });
+
+        res.json(keysObj);
+    } catch (error) {
+        res.status(500).json({ error: "Erro ao buscar chaves do Facebook" });
+    }
+};
+
+// Salvar ou Atualizar as chaves
+export const updateFacebookKeys = async (req, res) => {
+    try {
+        const data = req.body; // Recebe o objeto com as chaves do modal
+
+        // Faz um loop nos dados recebidos e salva cada um no banco
+        const promises = Object.entries(data).map(([chave, valor]) => {
+            return prisma.configuracoes.upsert({
+                where: { chave },
+                update: { valor: String(valor) },
+                create: { chave, valor: String(valor) }
+            });
+        });
+
+        await Promise.all(promises);
+        res.json({ message: "Configurações salvas com sucesso!" });
+    } catch (error) {
+        res.status(500).json({ error: "Erro ao salvar chaves no banco de dados" });
+    }
+};

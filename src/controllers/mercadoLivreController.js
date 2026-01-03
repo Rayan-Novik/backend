@@ -171,3 +171,83 @@ export const uploadInvoice = async (req, res) => {
         res.status(error.response?.status || 500).json({ message: 'Não foi possível enviar a Nota Fiscal.' });
     }
 };
+
+/**
+ * @desc    Buscar perguntas não respondidas do vendedor
+ * @route   GET /api/mercadolivre/questions
+ */
+export const getMlQuestions = async (req, res) => {
+    try {
+        const accessToken = await getValidAccessToken();
+
+        const { data: userData } = await axios.get('https://api.mercadolibre.com/users/me', {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        const { data: questionsData } = await axios.get('https://api.mercadolibre.com/questions/search', {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+            params: {
+                seller_id: userData.id,
+                sort: 'date_desc',
+                limit: 50 
+            }
+        });
+
+        const questions = questionsData.questions || [];
+
+        const questionsWithDetails = await Promise.all(questions.map(async (q) => {
+            try {
+                // 1. Busca os dados em tempo real no Mercado Livre
+                const itemRes = await axios.get(`https://api.mercadolibre.com/items/${q.item_id}`);
+                
+                // 2. ✅ PARTE NOVA: Busca o produto correspondente no seu banco de dados local
+                // Procura um produto onde o campo id_mercadolivre seja igual ao item_id da pergunta
+                // const produtoLocal = await Produto.findOne({ where: { id_mercadolivre: q.item_id } });
+
+                return { 
+                    ...q, 
+                    item_status: itemRes.data.status,
+                    // Se encontrar no seu banco, usa sua imagem e título, senão usa o do ML
+                    product_title: itemRes.data.title, // produtoLocal ? produtoLocal.nome : itemRes.data.title
+                    product_image: itemRes.data.thumbnail // produtoLocal ? produtoLocal.imagem_url : itemRes.data.thumbnail
+                };
+            } catch (err) {
+                return { ...q, item_status: 'unknown' };
+            }
+        }));
+
+        res.json(questionsWithDetails);
+    } catch (error) {
+        console.error("Erro ao carregar perguntas:", error.message);
+        res.status(500).json({ message: 'Erro ao carregar histórico de perguntas.' });
+    }
+};
+
+/**
+ * @desc    Responder uma pergunta específica
+ * @route   POST /api/mercadolivre/questions/answer
+ */
+export const answerQuestion = async (req, res) => {
+    try {
+        const { question_id, text } = req.body;
+        
+        if (!question_id || !text) {
+            return res.status(400).json({ message: 'ID da pergunta e texto são obrigatórios.' });
+        }
+
+        const accessToken = await getValidAccessToken();
+
+        // No Mercado Livre, o endpoint para responder é /answers
+        const { data } = await axios.post('https://api.mercadolibre.com/answers', 
+            { question_id, text },
+            { headers: { 'Authorization': `Bearer ${accessToken}` } }
+        );
+
+        res.json({ message: 'Pergunta respondida com sucesso!', data });
+    } catch (error) {
+        // Log detalhado para capturar erros específicos do ML (ex: pergunta já respondida ou excluída)
+        console.error("Erro ao responder pergunta no ML:", error.response?.data || error.message);
+        const errorMsg = error.response?.data?.message || 'Não foi possível enviar a resposta.';
+        res.status(error.response?.status || 500).json({ message: errorMsg });
+    }
+};

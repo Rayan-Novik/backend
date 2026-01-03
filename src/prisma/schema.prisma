@@ -87,47 +87,54 @@ model pedidos {
 }
 
 model produtos {
-  id_produto            Int                     @id @default(autoincrement())
-  nome                  String                  @db.VarChar(255)
-  descricao             String?                 @db.Text
-  preco                 Decimal                 @db.Decimal(10, 2)
-  estoque               Int                     @default(0)
-  imagem_url            String?                 @db.VarChar(2048)
-  id_categoria          Int?
-  id_marca              Int?
-  desconto_percentual   Int                     @default(0)
-  visualizacoes         Int                     @default(0)
-  peso                  Decimal                 @default(0.30) @db.Decimal(10, 2)
-  comprimento           Decimal                 @default(16.00) @db.Decimal(10, 2)
-  altura                Decimal                 @default(2.00) @db.Decimal(10, 2)
-  largura               Decimal                 @default(11.00) @db.Decimal(10, 2)
-  mercado_livre_id      String?                 @db.VarChar(255)
-  ml_status             String?                 @default("Não Publicado") @db.VarChar(50)
-  tiktok_video_url      String?                 @db.VarChar(2048)
-  tiktok_product_id     String?                 @db.VarChar(255)
-  tiktok_status         String?                 @default("Não Publicado") @db.VarChar(50)
-  custo                 Decimal?                @db.Decimal(10, 2)
-  ativo                 Boolean                 @default(true)
-  ml_category_id        String?                 @db.VarChar(255)
-  ml_attributes         Json?
-  id_subcategoria       Int?
-  active_ecommerce      Boolean                 @default(true)
-  id_externo            String?                 @unique(map: "uk_produtos_id_externo") @db.VarChar(255)
-  avaliacoes            avaliacoes[]
-  carrinhos             carrinhos[]
-  cupons_desconto       cupons_desconto[]
-  historico_precos      historico_precos[]
-  lista_desejos         lista_desejos[]
-  log_estoque           log_estoque[]
-  produto_subimagens    produto_subimagens[]
-  categorias            categorias?             @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_1")
-  marcas                marcas?                 @relation(fields: [id_marca], references: [id_marca], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_2")
-  subcategorias         subcategorias?          @relation(fields: [id_subcategoria], references: [id_subcategoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_subcategoria")
-  promocoes_automaticas promocoes_automaticas[]
+  id_produto                  Int                           @id @default(autoincrement())
+  nome                        String                        @db.VarChar(255)
+  descricao                   String?                       @db.Text
+  preco                       Decimal                       @db.Decimal(10, 2)
+  estoque                     Int                           @default(0)
+  imagem_url                  String?                       @db.VarChar(2048)
+  id_categoria                Int?
+  id_marca                    Int?
+  desconto_percentual         Int                           @default(0)
+  visualizacoes               Int                           @default(0)
+  id_fornecedor               Int?
+  url_shopee_original         String?                       @db.VarChar(2048)
+  peso                        Decimal                       @default(0.30) @db.Decimal(10, 2)
+  comprimento                 Decimal                       @default(16.00) @db.Decimal(10, 2)
+  altura                      Decimal                       @default(2.00) @db.Decimal(10, 2)
+  largura                     Decimal                       @default(11.00) @db.Decimal(10, 2)
+  mercado_livre_id            String?                       @db.VarChar(255)
+  ml_status                   String?                       @default("Não Publicado") @db.VarChar(50)
+  tiktok_video_url            String?                       @db.VarChar(2048)
+  tiktok_product_id           String?                       @db.VarChar(255)
+  tiktok_status               String?                       @default("Não Publicado") @db.VarChar(50)
+  custo                       Decimal?                      @db.Decimal(10, 2)
+  ativo                       Boolean                       @default(true)
+  ml_category_id              String?                       @db.VarChar(255)
+  ml_attributes               Json?
+  id_subcategoria             Int?
+  active_ecommerce            Boolean                       @default(true)
+  id_externo                  String?                       @unique(map: "uk_produtos_id_externo") @db.VarChar(255)
+  preco_custo                 Decimal                       @default(0.00) @db.Decimal(10, 2)
+  avaliacoes                  avaliacoes[]
+  campanha_marketing_produtos campanha_marketing_produtos[]
+  carrinhos                   carrinhos[]
+  cupons_desconto             cupons_desconto[]
+  historico_precos            historico_precos[]
+  lista_desejos               lista_desejos[]
+  log_estoque                 log_estoque[]
+  produto_subimagens          produto_subimagens[]
+  produto_visualizacoes       produto_visualizacoes[]
+  fornecedores                fornecedores?                 @relation(fields: [id_fornecedor], references: [id_fornecedor], map: "fk_produtos_fornecedor")
+  categorias                  categorias?                   @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_1")
+  marcas                      marcas?                       @relation(fields: [id_marca], references: [id_marca], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_2")
+  subcategorias               subcategorias?                @relation(fields: [id_subcategoria], references: [id_subcategoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_subcategoria")
+  promocoes_automaticas       promocoes_automaticas[]
 
   @@index([id_categoria], map: "id_categoria")
   @@index([id_marca], map: "id_marca")
   @@index([id_subcategoria], map: "id_subcategoria")
+  @@index([id_fornecedor], map: "idx_produto_fornecedor")
 }
 
 model usuarios {
@@ -428,6 +435,70 @@ model menus_rodape {
   coluna  String  @db.VarChar(50)
   ordem   Int     @default(0)
   ativo   Boolean @default(true)
+}
+
+model produto_visualizacoes {
+  id         Int      @id @default(autoincrement())
+  id_produto Int
+  data       DateTime @db.Date
+  quantidade Int      @default(1)
+  produtos   produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_produto_visualizacoes_produto")
+
+  @@unique([id_produto, data], map: "uk_produto_data")
+  @@index([data], map: "idx_data_view")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model fornecedores {
+  id_fornecedor   Int        @id @default(autoincrement())
+  nome_loja       String     @db.VarChar(255)
+  documento       String?    @db.VarChar(20)
+  shopee_loja_url String?    @db.VarChar(2048)
+  contato_whats   String?    @db.VarChar(20)
+  email           String?    @db.VarChar(100)
+  responsavel     String?    @db.VarChar(100)
+  endereco        String?    @db.VarChar(255)
+  reputacao       Float?     @default(0) @db.Float
+  prazo_medio     Int?
+  status          String?    @default("Ativo") @db.VarChar(20)
+  criado_em       DateTime?  @default(now()) @db.Timestamp(0)
+  produtos        produtos[]
+}
+
+model campanha_marketing_produtos {
+  id_campanha         Int
+  id_produto          Int
+  preco_promocional   Decimal?            @db.Decimal(10, 2)
+  campanhas_marketing campanhas_marketing @relation(fields: [id_campanha], references: [id_campanha], onDelete: Cascade, onUpdate: NoAction, map: "campanha_marketing_produtos_ibfk_1")
+  produtos            produtos            @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "campanha_marketing_produtos_ibfk_2")
+
+  @@id([id_campanha, id_produto])
+  @@index([id_produto], map: "id_produto")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model campanhas_marketing {
+  id_campanha                 Int                           @id @default(autoincrement())
+  nome                        String                        @db.VarChar(255)
+  slug                        String                        @unique(map: "slug") @db.VarChar(255)
+  descricao                   String?                       @db.Text
+  banner_desktop              String?                       @db.VarChar(2048)
+  banner_mobile               String?                       @db.VarChar(2048)
+  cor_tema                    String?                       @default("#0d6efd") @db.VarChar(7)
+  data_inicio                 DateTime                      @db.DateTime(0)
+  data_fim                    DateTime                      @db.DateTime(0)
+  ativo                       Boolean?                      @default(true)
+  cliques                     Int?                          @default(0)
+  vendas_geradas              Int?                          @default(0)
+  faturamento_gerado          Decimal?                      @default(0.00) @db.Decimal(10, 2)
+  imagem_url                  String?                       @db.Text
+  campanha_marketing_produtos campanha_marketing_produtos[]
+}
+
+model SiteConfig {
+  id    Int    @id @default(autoincrement())
+  chave String @unique
+  valor Json
 }
 
 enum banners_laterais_posicao {

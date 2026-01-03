@@ -9,6 +9,20 @@ import { decrypt } from '../services/cryptoService.js';
 import { calcularDesconto } from '../services/discountService.js'; // ✅ Importado
 import Produto from '../models/produtoModel.js'; 
 import axios from 'axios';
+import cron from 'node-cron'; // ✅ Importado
+
+// ✅ AGENDAMENTO: Roda a cada 10 minutos para limpar pedidos órfãos (Pendentes há mais de 1h)
+cron.schedule('*/10 * * * *', async () => {
+    try {
+        console.log('⏰ [CRON] Verificando pedidos expirados (1h+)...');
+        const total = await PedidoModel.cancelarPedidosExpirados();
+        if (total > 0) {
+            console.log(`✅ [CRON] ${total} pedido(s) cancelado(s) por expiração.`);
+        }
+    } catch (error) {
+        console.error('❌ [CRON] Erro ao cancelar pedidos:', error);
+    }
+});
 
 // --- Funções de Cliente ---
 
@@ -16,17 +30,17 @@ export const criarPedido = async (req, res, next) => {
     try {
         const id_usuario = req.user.id_usuario;
         
-        // Recebe dados do frontend
         const { 
             id_endereco_entrega, 
             preco_frete = 0, 
             paymentMethod, 
             paymentData, 
             dados_entrega,
-            cupom_aplicado // ✅ Recebe objeto { code: 'ABC' }
+            cupom_aplicado,
+            device_id // ✅ AÇÃO OBRIGATÓRIA: Recebe o ID do dispositivo do frontend
         } = req.body;
 
-        // --- Validações Básicas ---
+        // Validações Iniciais
         if (!id_endereco_entrega && Number(preco_frete) > 0) {
             return res.status(400).json({ message: "O endereço de entrega é obrigatório para entregas." });
         }
@@ -42,168 +56,148 @@ export const criarPedido = async (req, res, next) => {
             return res.status(400).json({ message: "CPF do usuário não encontrado ou inválido." });
         }
 
-        // --- 1. Cálculo de Preço dos Itens (Recalcula do zero por segurança) ---
+        // --- 1. Cálculo de Preço dos Itens ---
         const preco_itens = carrinhoItens.reduce((total, item) => {
             const preco = parseFloat(item.produtos.preco);
             const quantidade = parseInt(item.quantidade, 10);
-            if (!isNaN(preco) && !isNaN(quantidade)) {
-                return total + (preco * quantidade);
-            }
-            return total;
+            return total + (preco * quantidade);
         }, 0);
 
-        // --- 2. Aplicação de Cupom (Backend Validation) ---
+        // --- 2. Aplicação de Cupom ---
         let valorDescontoCupom = 0;
         let cupomId = null;
-
         if (cupom_aplicado && cupom_aplicado.code) {
             const cupomDb = await CupomModel.findByCode(cupom_aplicado.code);
             if (cupomDb) {
-                // Formata o carrinho para o serviço de desconto
                 const carrinhoFormatado = carrinhoItens.map(i => ({
                     id_produto: i.produtos.id_produto,
                     preco: i.produtos.preco,
                     quantidade: i.quantidade,
                     produto: i.produtos
                 }));
-
                 try {
-                    // Recalcula o desconto usando a mesma lógica do frontend
                     valorDescontoCupom = calcularDesconto(carrinhoFormatado, cupomDb, Number(preco_frete));
                     cupomId = cupomDb.id_cupom;
-                    
-                    // Incrementa uso do cupom (poderia ser feito após confirmação de pagamento, mas aqui garante a reserva)
                     await CupomModel.incrementUsage(cupomDb.id_cupom);
-                } catch (err) {
-                    console.error("Erro ao validar cupom no backend:", err.message);
-                }
+                } catch (err) { console.error("Erro cupom:", err.message); }
             }
         }
 
-        // Total parcial (Itens + Frete - Cupom)
         let preco_total_calculado = Math.max(0, preco_itens + Number(preco_frete) - valorDescontoCupom);
 
-        // --- 3. Aplicação de Desconto PIX (COM TRAVA DE CUPOM) ---
+        // --- 3. Desconto PIX ---
         let valorDescontoPix = 0;
-        
-        // ✅ AQUI ESTÁ A LÓGICA DE EXCLUSÃO: Só aplica Pix se não tiver cupom (cupomId é null)
         if (paymentMethod === 'PIX' && !cupomId) {
             const pixAtivoStr = await ConfiguracaoModel.get('pix_desconto_ativo');
             const pixPorcentagemStr = await ConfiguracaoModel.get('pix_desconto_porcentagem');
-            
-            const pixAtivo = pixAtivoStr === 'true';
-            const pixPorcentagem = Number(pixPorcentagemStr || 0);
-
-            if (pixAtivo && pixPorcentagem > 0) {
-                valorDescontoPix = preco_total_calculado * (pixPorcentagem / 100);
-                preco_total_calculado = preco_total_calculado - valorDescontoPix;
+            if (pixAtivoStr === 'true') {
+                valorDescontoPix = preco_total_calculado * (Number(pixPorcentagemStr) / 100);
+                preco_total_calculado -= valorDescontoPix;
             }
         }
 
-        // Preço Total Final (Arredondado para 2 casas decimais)
         const preco_total_final = Number(preco_total_calculado.toFixed(2));
 
-        if (preco_total_final <= 0) {
-            return res.status(400).json({ message: "O valor total do pedido deve ser maior que zero." });
-        }
+        // ✅ AÇÃO RECOMENDADA: Mapear itens detalhados para o Antifraude
+        const itemsParaGateway = carrinhoItens.map(item => ({
+            id: String(item.produtos.id_produto),
+            title: item.produtos.nome,
+            description: item.produtos.descricao || item.produtos.nome,
+            category_id: 'others', // Opcional: pode ser dinâmico
+            quantity: Number(item.quantidade),
+            unit_price: Number(item.produtos.preco)
+        }));
 
-        console.log(`💰 Checkout: Itens: ${preco_itens} | Frete: ${preco_frete} | Cupom: -${valorDescontoCupom} | Pix: -${valorDescontoPix} | TOTAL: ${preco_total_final}`);
-
-        // --- LÓGICA DE PAGAMENTO ---
+        // --- 4. LÓGICA DE PAGAMENTO ---
         let pagamentoResult;
         let metodoPagamentoFinal = paymentMethod;
 
-        // Dados do pagador
-        const payerInfo = {
+        const [primeiroNome, ...sobrenomeArray] = usuario.nome_completo.split(' ');
+        const sobrenome = sobrenomeArray.join(' ') || 'Sobrenome';
+
+        const commonPayerData = {
             email: usuario.email,
+            firstName: primeiroNome,
+            lastName: sobrenome,
             identification: { type: "CPF", number: cpfLimpo }
         };
 
-        if (paymentMethod === 'CreditCard') {
+        if (paymentMethod === 'CreditCard' || paymentMethod === 'DebitCard') {
             const { token, installments, payment_method_id, issuer_id, payer } = paymentData;
             metodoPagamentoFinal = payment_method_id;
-            pagamentoResult = await criarPagamentoCartao({
-                amount: preco_total_final, // ✅ Usa valor com desconto correto
-                token, installments, payment_method_id, issuer_id,
+            
+            const gatewayFunc = paymentMethod === 'CreditCard' ? criarPagamentoCartao : criarPagamentoDebito;
+            
+            pagamentoResult = await gatewayFunc({
+                amount: preco_total_final,
+                token,
+                installments,
+                payment_method_id,
+                issuer_id,
+                items: itemsParaGateway, // ✅ AÇÃO RECOMENDADA
+                device_id: device_id,    // ✅ AÇÃO OBRIGATÓRIA (Cartão)
                 payer: {
-                    email: payer.email,
-                    identification: { type: payer.identification.type, number: payer.identification.number }
-                }
-            });
-
-        } else if (paymentMethod === 'DebitCard') {
-            const { token, payment_method_id, issuer_id, payer } = paymentData;
-            metodoPagamentoFinal = payment_method_id;
-            pagamentoResult = await criarPagamentoDebito({
-                amount: preco_total_final, // ✅ Usa valor com desconto correto
-                token, payment_method_id, issuer_id,
-                payer: {
-                    email: payer.email,
-                    identification: { type: payer.identification.type, number: payer.identification.number }
+                    ...commonPayerData,
+                    email: payer.email || commonPayerData.email // Garante email do checkout
                 }
             });
 
         } else if (paymentMethod === 'PIX') {
             metodoPagamentoFinal = 'pix';
-            const [primeiroNome, ...sobrenomeArray] = usuario.nome_completo.split(' ');
-            const sobrenome = sobrenomeArray.join(' ');
-            
             pagamentoResult = await criarPagamentoPix({
-                amount: preco_total_final, // ✅ Usa valor com desconto correto (Pix ou Cupom)
-                payer: {
-                    ...payerInfo,
-                    firstName: primeiroNome,
-                    lastName: sobrenome
-                },
+                amount: preco_total_final,
+                items: itemsParaGateway, // ✅ AÇÃO RECOMENDADA
+                payer: commonPayerData
             });
-
-        } else {
-            return res.status(400).json({ message: "Método de pagamento não reconhecido." });
         }
-        
+
+        // --- 5. Finalização e Banco de Dados ---
         const statusPagamento = pagamentoResult.status === 'approved' ? 'PAGO' : 'PENDENTE';
 
-        // --- Snapshot de Endereço ---
         let snapshotEndereco = {
-            entrega_logradouro: null, entrega_numero: null, entrega_bairro: null,
-            entrega_cidade: null, entrega_estado: null, entrega_cep: null, entrega_complemento: null
+            entrega_logradouro: dados_entrega?.entrega_logradouro || null,
+            entrega_numero: dados_entrega?.entrega_numero || null,
+            entrega_bairro: dados_entrega?.entrega_bairro || null,
+            entrega_cidade: dados_entrega?.entrega_cidade || null,
+            entrega_estado: dados_entrega?.entrega_estado || null,
+            entrega_cep: dados_entrega?.entrega_cep || null,
+            entrega_complemento: dados_entrega?.entrega_complemento || null
         };
 
-        if (dados_entrega) {
-            snapshotEndereco = { ...dados_entrega };
-        }
-        else if (id_endereco_entrega) {
-            try {
-                const enderecoDb = await EnderecoModel.findById(id_endereco_entrega);
-                if (enderecoDb) {
-                    snapshotEndereco = {
-                        entrega_logradouro: enderecoDb.logradouro || enderecoDb.rua,
-                        entrega_numero: enderecoDb.numero,
-                        entrega_bairro: enderecoDb.bairro,
-                        entrega_cidade: enderecoDb.cidade,
-                        entrega_estado: enderecoDb.estado || enderecoDb.uf,
-                        entrega_cep: enderecoDb.cep,
-                        entrega_complemento: enderecoDb.complemento
-                    };
-                }
-            } catch (err) {
-                console.error("Erro ao buscar endereço de backup:", err);
+        // Se não veio dados_entrega, tenta buscar do banco
+        if (!dados_entrega && id_endereco_entrega) {
+            const enderecoDb = await EnderecoModel.findById(id_endereco_entrega);
+            if (enderecoDb) {
+                snapshotEndereco = {
+                    entrega_logradouro: enderecoDb.logradouro,
+                    entrega_numero: enderecoDb.numero,
+                    entrega_bairro: enderecoDb.bairro,
+                    entrega_cidade: enderecoDb.cidade,
+                    entrega_estado: enderecoDb.estado,
+                    entrega_cep: enderecoDb.cep,
+                    entrega_complemento: enderecoDb.complemento
+                };
             }
         }
 
-        // --- Criação do Pedido no Banco ---
         const pedidoCriado = await PedidoModel.create({
             id_usuario,
             id_endereco_entrega: id_endereco_entrega ? Number(id_endereco_entrega) : null,
             metodo_pagamento: metodoPagamentoFinal,
             preco_itens,
             preco_frete,
-            preco_total: preco_total_final, // ✅ Salva o valor real a ser pago
+            preco_total: preco_total_final,
             status_pagamento: statusPagamento,
             id_pagamento_gateway: pagamentoResult.id.toString(),
-            id_cupom_utilizado: cupomId, // ✅ Salva o ID do cupom se foi usado
+            id_cupom_utilizado: cupomId,
             ...snapshotEndereco 
         }, carrinhoItens);
+
+        // ✅ LÓGICA DE ESTOQUE IMEDIATA:
+        // Se o pagamento for aprovado agora (ex: Cartão), chama a função do Model que reduz o estoque.
+        if (statusPagamento === 'PAGO') {
+            await PedidoModel.updateStatusByGatewayId(pagamentoResult.id.toString(), 'PAGO');
+        }
 
         await CarrinhoModel.clear(id_usuario);
 
@@ -214,29 +208,22 @@ export const criarPedido = async (req, res, next) => {
                 id: pedidoCriado.id_pedido || pedidoCriado.id,
                 total: preco_total_final,
                 cliente: usuario.nome_completo,
-                status: statusPagamento,
-                tipo: id_endereco_entrega ? 'Entrega' : 'Retirada'
+                status: statusPagamento
             });
         }
 
-        // --- Resposta ---
-        if (paymentMethod === 'CreditCard' || paymentMethod === 'DebitCard') {
-            res.status(201).json({
-                message: `Pagamento ${statusPagamento === 'PAGO' ? 'aprovado' : 'pendente'}.`,
-                pedido: pedidoCriado
-            });
-        } else { // PIX
-            res.status(201).json({
-                message: "Pedido criado! Aguardando pagamento PIX.",
-                pedido: pedidoCriado,
-                paymentInfo: {
-                    transaction_amount: preco_total_final, // ✅ Envia o valor correto pro frontend
-                    id_pagamento: pagamentoResult.id,
-                    qr_code: pagamentoResult.point_of_interaction?.transaction_data?.qr_code,
-                    qr_code_base64: pagamentoResult.point_of_interaction?.transaction_data?.qr_code_base64,
-                }
-            });
-        }
+        // Resposta
+        res.status(201).json({
+            message: "Pedido processado!",
+            pedido: pedidoCriado,
+            paymentInfo: paymentMethod === 'PIX' ? {
+                transaction_amount: preco_total_final,
+                id_pagamento: pagamentoResult.id,
+                qr_code: pagamentoResult.point_of_interaction?.transaction_data?.qr_code,
+                qr_code_base64: pagamentoResult.point_of_interaction?.transaction_data?.qr_code_base64,
+                date_of_expiration: pagamentoResult.date_of_expiration // ✅ Crucial para o cronômetro
+            } : null
+        });
 
     } catch (error) {
         console.error("Erro no criarPedido:", error);

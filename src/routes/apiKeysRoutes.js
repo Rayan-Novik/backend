@@ -9,7 +9,9 @@ import {
     updateMercadoPagoGatewayKeys,
     // ✅ Importa as novas funções do ImgBB
     getImgBBKeyStatus,
-    updateImgBBKey
+    updateImgBBKey,
+    updateFacebookKeys,
+    getFacebookKeys,
 } from '../controllers/apiKeysController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
@@ -33,5 +35,10 @@ router.route('/mercadopago')
 router.route('/imgbb')
     .get(protect, admin, getImgBBKeyStatus)
     .put(protect, admin, updateImgBBKey);
+
+router.route('/facebook')
+    .get(protect, admin, getFacebookKeys)
+    .post(protect, admin, updateFacebookKeys)
+    .put(protect, admin, updateFacebookKeys); // Adicionado put por precaução   
 
 export default router;

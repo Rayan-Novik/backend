@@ -1,52 +1,63 @@
 import { MercadoPagoConfig, Payment } from 'mercadopago';
+import axios from 'axios';
 import PedidoModel from '../models/pedidoModel.js';
 import UsuarioModel from '../models/usuarioModel.js';
 import EnderecoModel from '../models/enderecoModel.js';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const client = new MercadoPagoConfig({ 
-    accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN 
-});
+import ConfiguracaoModel from '../models/configuracaoModel.js'; // ✅ Adicionado import faltando
 
 export const handleMercadoPagoWebhook = async (req, res) => {
-    const { query } = req;
-    console.log("--- WEBHOOK DO MERCADO PAGO RECEBIDO ---");
-    console.log("Query da notificação:", query);
+    const paymentId = req.query['data.id'] || req.query.id;
+    const type = req.query.type || req.query.topic;
 
-    if (query.type === 'payment') {
+    if (type === 'payment' && paymentId) {
         try {
-            const payment_id = query['data.id'] || query.id;
-            console.log(`Buscando informações do pagamento com ID: ${payment_id}`);
+            console.log(`--- WEBHOOK MP: Processando Pagamento ${paymentId} ---`);
 
-            const paymentApi = new Payment(client);
-            const paymentInfo = await paymentApi.get({ id: payment_id });
+            // ✅ Aguarda 3 segundos para garantir que o MP processou o ID em seus servidores
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
-            if (paymentInfo) {
-                console.log("Informações do pagamento recebidas:", {
-                    id: paymentInfo.id,
-                    status: paymentInfo.status,
-                    status_detail: paymentInfo.status_detail
-                });
-
-                const gatewayId = paymentInfo.id.toString();
-                const status = paymentInfo.status === 'approved' ? 'PAGO' : 
-                               paymentInfo.status === 'cancelled' ? 'CANCELADO' :
-                               paymentInfo.status === 'rejected' ? 'REJEITADO' : 'PENDENTE';
-                
-                await PedidoModel.updatePaymentStatusByGatewayId(gatewayId, status);
-                console.log(`✅ Sucesso! Status do pedido com ID de gateway ${gatewayId} atualizado para ${status}`);
-            } else {
-                console.warn(`Pagamento com ID ${payment_id} não encontrado no Mercado Pago.`);
+            // ✅ Busca o Access Token dinamicamente do banco
+            const accessToken = await ConfiguracaoModel.get('MERCADOPAGO_ACCESS_TOKEN');
+            
+            if (!accessToken) {
+                console.error("❌ Erro: MERCADOPAGO_ACCESS_TOKEN não encontrado no banco.");
+                return res.status(500).send('Erro de configuração');
             }
+
+            const client = new MercadoPagoConfig({ accessToken: accessToken.trim() });
+            const payment = new Payment(client);
+
+            // Consulta os detalhes do pagamento no Mercado Pago
+            const paymentData = await payment.get({ id: paymentId });
+
+            // Mapeamento de status do Mercado Pago para o seu Sistema
+            let statusFinal = 'PENDENTE';
+            if (paymentData.status === 'approved') statusFinal = 'PAGO';
+            if (paymentData.status === 'cancelled' || paymentData.status === 'rejected') statusFinal = 'CANCELADO';
+            if (paymentData.status === 'in_process') statusFinal = 'EM ANALISE';
+
+            // ✅ Atualiza no seu banco de dados usando o ID do Gateway
+            const atualizado = await PedidoModel.updateStatusByGatewayId(String(paymentId), statusFinal);
+
+            if (atualizado) {
+                console.log(`✅ Status do pedido gateway ${paymentId} atualizado para: ${statusFinal}`);
+            } else {
+                console.warn(`⚠️ Notificação recebida, mas pedido ${paymentId} não encontrado no banco local.`);
+            }
+
         } catch (error) {
-            console.error("❌ Erro ao processar o webhook do Mercado Pago:", error);
-            return res.sendStatus(500);
+            console.error("❌ Erro no processamento do webhook MP:", error.message);
+            
+            // Se o MP responder que o pagamento não existe (404), retornamos 404 para ele tentar de novo
+            if (error.status === 404) {
+                return res.status(404).send('Pagamento ainda não disponível para consulta');
+            }
+            return res.status(500).send('Erro interno');
         }
     }
-    // Responde 200 OK para confirmar o recebimento da notificação
-    res.sendStatus(200);
+
+    // Retorna 200 sempre que a notificação for recebida com sucesso
+    return res.status(200).send('OK');
 };
 
 export const handleMercadoLivreNotification = async (req, res, next) => {
@@ -54,35 +65,27 @@ export const handleMercadoLivreNotification = async (req, res, next) => {
         const notification = req.body;
         console.log('--- WEBHOOK DO MERCADO LIVRE RECEBIDO ---', notification);
 
-        // O Mercado Livre envia notificações para vários eventos, filtramos apenas os de pedidos.
         if (notification.topic === 'orders_v2') {
+            // Supondo que você tenha essa função getValidAccessToken para o ML
             const accessToken = await getValidAccessToken();
             
-            // Busca os detalhes completos do pedido na API do Mercado Livre
             const { data: orderData } = await axios.get(notification.resource, {
                 headers: { 'Authorization': `Bearer ${accessToken}` }
             });
 
-            console.log('Detalhes do Pedido do ML:', orderData.id);
-
-            // 1. Verifica se o pedido já existe no seu banco para evitar duplicados
             const pedidoExistente = await PedidoModel.findByGatewayId(String(orderData.id));
 
             if (!pedidoExistente) {
-                // 2. Encontra ou cria o cliente no seu sistema
                 let cliente = await UsuarioModel.findByEmail(orderData.buyer.email);
                 if (!cliente) {
-                    // Se o cliente não existe, cria um novo com uma senha padrão
                     cliente = await UsuarioModel.create({
                         nome_completo: `${orderData.buyer.first_name} ${orderData.buyer.last_name}`,
                         email: orderData.buyer.email,
-                        // ATENÇÃO: Crie uma senha padrão segura ou um gerador de senhas
-                        hash_senha: 'senha_padrao_mercado_livre', 
+                        hash_senha: 'senha_padrao_mercado_livre_segura', 
                         isAdmin: false
                     });
                 }
                 
-                // 3. Cria um novo endereço de entrega para este pedido
                 const shippingAddress = orderData.shipping.receiver_address;
                 const enderecoCriado = await EnderecoModel.create({
                     id_usuario: cliente.id_usuario,
@@ -92,14 +95,13 @@ export const handleMercadoLivreNotification = async (req, res, next) => {
                     complemento: shippingAddress.comment,
                     bairro: shippingAddress.neighborhood.name,
                     cidade: shippingAddress.city.name,
-                    estado: shippingAddress.state.id.replace('BR-', ''), // Remove o prefixo 'BR-'
+                    estado: shippingAddress.state.id.replace('BR-', ''),
                     is_principal: false
                 });
 
-                // 4. Mapeia os itens do pedido do ML para o formato do seu sistema
                 const itemsDoPedido = orderData.order_items.map(item => ({
-                    produtos: { // Mock da estrutura que o PedidoModel.create espera
-                        id_produto: null, // O produto pode não existir no seu catálogo
+                    produtos: { 
+                        id_produto: null,
                         nome: item.item.title,
                         preco: item.unit_price,
                         imagem_url: item.item.picture_url || null
@@ -110,7 +112,6 @@ export const handleMercadoLivreNotification = async (req, res, next) => {
                 const statusPagamento = orderData.payments[0]?.status === 'approved' ? 'PAGO' : 'PENDENTE';
                 const statusEntrega = statusPagamento === 'PAGO' ? 'Em processamento' : 'Pendente';
 
-                // 5. Cria o pedido no seu banco de dados
                 await PedidoModel.create({
                     id_usuario: cliente.id_usuario,
                     id_endereco_entrega: enderecoCriado.id_endereco,
@@ -121,19 +122,16 @@ export const handleMercadoLivreNotification = async (req, res, next) => {
                     status_pagamento: statusPagamento,
                     id_pagamento_gateway: String(orderData.id),
                     status_entrega: statusEntrega,
-                    canal_venda: 'Mercado Livre', // Identifica a origem do pedido
+                    canal_venda: 'Mercado Livre',
                 }, itemsDoPedido);
                 
-                console.log(`✅ Pedido #${orderData.id} do Mercado Livre criado com sucesso!`);
-            } else {
-                console.log(`Pedido #${orderData.id} do Mercado Livre já existe no sistema. Ignorando.`);
+                console.log(`✅ Pedido #${orderData.id} do Mercado Livre criado.`);
             }
         }
         
-        // Responde ao Mercado Livre para confirmar que a notificação foi recebida
         res.status(200).send('Notificação recebida.');
     } catch (error) {
         console.error('❌ Erro ao processar webhook do Mercado Livre:', error.message);
-        next(error);
+        res.status(200).send('Erro logado, mas aviso recebido'); // Evita loop de erro no ML
     }
 };

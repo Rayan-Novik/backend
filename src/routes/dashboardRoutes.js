@@ -4,7 +4,12 @@ const router = express.Router();
 import {
     getDashboardKPIs,
     getDetailedSalesChartData,
-    getRecentConfirmedOrders
+    getRecentConfirmedOrders,
+    getTopSellingProducts,
+    getMostViewedProducts,
+    getInventoryStatus,
+    getStockDetails,
+    getReviewsSummary,
 } from '../controllers/dashboardController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
@@ -22,6 +27,16 @@ router.route('/kpis').get(getDashboardKPIs);
 router.route('/detailed-sales-chart').get(getDetailedSalesChartData);
 
 router.route('/recent-confirmed-orders').get(getRecentConfirmedOrders);
+
+router.get('/top-products', protect, admin, getTopSellingProducts);
+
+router.get('/most-viewed-products', protect, admin, getMostViewedProducts);
+
+router.get('/inventory-status', protect, admin, getInventoryStatus);
+
+router.get('/stock-details', protect, admin, getStockDetails);
+
+router.get('/reviews-summary', protect, admin, getReviewsSummary);
 
 // Nota: A funcionalidade de 'pedidos recentes' foi integrada na rota de KPIs para otimizar o carregamento.
 
