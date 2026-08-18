@@ -1,0 +1,1486 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model carrinhos {
+  id_carrinho     Int      @id @default(autoincrement())
+  id_tenant       Int?
+  id_usuario      Int
+  id_produto      Int
+  id_variacao     Int?
+  quantidade      Decimal  @db.Decimal(10, 3)
+  data_adicionado DateTime @default(now()) @db.Timestamp(0)
+  
+  usuarios        usuarios @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "carrinhos_ibfk_1")
+  produtos        produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "carrinhos_ibfk_2")
+
+  // 🟢 UNIQUE REMOVIDO! Adicionamos um Index normal no lugar para manter a performance da busca rápida
+  @@index([id_usuario], map: "idx_usuario_carrinho")
+  @@index([id_produto], map: "id_produto")
+}
+
+model enderecos {
+  id_endereco  Int       @id @default(autoincrement())
+  id_usuario   Int
+  cep          String?   @db.VarChar(10)
+  logradouro   String    @db.VarChar(255)
+  numero       String    @db.VarChar(20)
+  complemento  String?   @db.VarChar(100)
+  bairro       String    @db.VarChar(100)
+  cidade       String    @db.VarChar(100)
+  estado       String    @db.VarChar(2)
+  is_principal Boolean?  @default(false)
+  is_active    Boolean   @default(true)
+  latitude     Float?
+  longitude    Float?
+  usuarios     usuarios  @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "enderecos_ibfk_1")
+  pedidos      pedidos[]
+
+  @@index([id_usuario], map: "id_usuario")
+}
+
+model pedido_items {
+  id_item    Int      @id @default(autoincrement())
+  id_pedido  Int
+  id_produto Int?
+  id_variacao Int?
+  nome       String   @db.VarChar(255)
+  quantidade Decimal  @db.Decimal(10, 3)
+  preco      Decimal  @db.Decimal(10, 2)
+  imagem_url String?  @db.VarChar(2048)
+  id_tenant  Int      @default(1)
+  tenants    tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_pedido_items_tenant")
+  pedidos    pedidos  @relation(fields: [id_pedido], references: [id_pedido], onDelete: Cascade, onUpdate: NoAction, map: "pedido_items_fk_pedido")
+  nome_atendente  String?  @db.VarChar(255)
+
+  @@index([id_pedido], map: "id_pedido")
+  @@index([id_tenant], map: "fk_pedido_items_tenant")
+}
+
+model pedidos {
+  id_pedido             Int                      @id @default(autoincrement())
+  id_tenant             Int
+  id_usuario            Int
+  id_endereco_entrega   Int?
+  entrega_cep           String?                  @db.VarChar(10)
+  entrega_logradouro    String?                  @db.VarChar(255)
+  entrega_numero        String?                  @db.VarChar(20)
+  entrega_complemento   String?                  @db.VarChar(100)
+  entrega_bairro        String?                  @db.VarChar(100)
+  entrega_cidade        String?                  @db.VarChar(100)
+  entrega_estado        String?                  @db.VarChar(50)
+  metodo_pagamento      String                   @db.VarChar(50)
+  preco_itens           Decimal                  @db.Decimal(10, 2)
+  preco_frete           Decimal                  @db.Decimal(10, 2)
+  preco_total           Decimal                  @db.Decimal(10, 2)
+  status_pagamento      String?                  @default("PENDENTE") @db.VarChar(50)
+  id_pagamento_gateway  String?                  @db.VarChar(255)
+  data_pedido           DateTime                 @default(now()) @db.Timestamp(0)
+  status_entrega        String                   @default("Pendente") @db.VarChar(50)
+  metodo_envio          String?                  @db.VarChar(100)
+  prazo_entrega         String?                  @db.VarChar(50)
+  codigo_rastreio       String?                  @db.VarChar(255)
+  id_cupom_utilizado    Int?
+  canal_venda           String                   @default("ecommerce") @db.VarChar(50)
+  gateway_provider      String                   @default("MERCADOPAGO") @db.VarChar(50)
+  ifood_order_id        String?                  @unique(map: "ifood_order_id") @db.VarChar(255)
+  ifood_display_id      String?                  @db.VarChar(50)
+  id_caixa_pdv          Int?
+  url_boleto            String?                  @db.Text
+  linha_digitavel       String?                  @db.VarChar(255)
+  delivery_pin          String?                  @db.VarChar(10)
+  driver_token          String?                  @unique @db.VarChar(255)
+  driver_token_expires  DateTime?                @db.DateTime(0)
+  driver_lat            Float?
+  driver_lng            Float?
+  id_mesa Int?
+  codigo_comanda        String?                  @db.VarChar(50) // Ex: "Mesa 04", "Ficha 42"
+  status_comanda        String?                  @default("ABERTA") @db.VarChar(20) // ABERTA, FECHADA, CANCELADA
+  nome_cliente_comanda  String?                 @db.VarChar(100) // Para chamar o cliente pelo nome, se for o caso
+  nome_atendente  String?  @db.VarChar(255)
+  nota_fiscal           notas_fiscais?
+
+
+  mesas   mesas? @relation(fields: [id_mesa], references: [id_mesa], onDelete: SetNull)
+  financeiro_contas_receber financeiro_contas_receber[]
+  agendamento_servico agendamentos_servicos?
+  pedido_items          pedido_items[]
+  caixa_pdv             caixa_pdv?               @relation(fields: [id_caixa_pdv], references: [id_caixa], map: "fk_pedidos_caixa_pdv")
+  cupons_desconto       cupons_desconto?         @relation(fields: [id_cupom_utilizado], references: [id_cupom], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_cupom")
+  tenants               tenants                  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_pedidos_tenants")
+  enderecos             enderecos?               @relation(fields: [id_endereco_entrega], references: [id_endereco], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_endereco")
+  usuarios              usuarios                 @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_usuario")
+  transacoes_financeiras transacoes_financeiras[]
+
+  @@index([id_endereco_entrega], map: "id_endereco_entrega")
+  @@index([id_usuario], map: "id_usuario")
+  @@index([id_cupom_utilizado], map: "fk_pedidos_cupom")
+  @@index([id_caixa_pdv], map: "idx_pedidos_caixa_pdv")
+  @@index([id_tenant], map: "fk_pedidos_tenants")
+}
+
+model impressoras {
+  id_impressora Int      @id @default(autoincrement())
+  id_tenant     Int
+  nome          String   @db.VarChar(100) // Ex: "Cozinha Quente", "Bar", "Caixa"
+  tipo_conexao  String   @default("REDE") @db.VarChar(50) // REDE, USB, BLUETOOTH
+  endereco_ip   String?  @db.VarChar(50)  // Ex: "192.168.1.110"
+  largura_papel Int      @default(80)     // 80mm ou 58mm
+  is_padrao     Boolean  @default(false)  // Se true, recebe tudo que não tiver categoria
+  ativo         Boolean  @default(true)
+
+  categorias    categorias[] // Relacionamento: Quais categorias imprimem aqui
+}
+
+model mesas {
+  id_mesa    Int       @id @default(autoincrement())
+  id_tenant  Int
+  nome       String    @db.VarChar(50)
+  status     String    @default("LIVRE") @db.VarChar(20)
+  mesa_agrupada  String?   @db.VarChar(50)
+  
+  tenants    tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  pedidos    pedidos[]
+
+  @@index([id_tenant], map: "idx_mesas_tenant")
+}
+
+model produtos {
+  id_produto                  Int                           @id @default(autoincrement())
+  id_tenant                   Int
+  nome                        String                        @db.VarChar(255)
+  slug                        String?                       @unique @db.VarChar(255)
+  descricao                   String?                       @db.Text
+  preco                       Decimal                       @db.Decimal(10, 2)
+  estoque                     Decimal                       @default(0.000) @db.Decimal(10, 3)
+  imagem_url                  String?                       @db.VarChar(2048)
+  id_categoria                Int?
+  id_marca                    Int?
+  desconto_percentual         Int                           @default(0)
+  visualizacoes               Int                           @default(0)
+  id_fornecedor               Int?
+  url_shopee_original         String?                       @db.VarChar(2048)
+  peso                        Decimal                       @default(0.30) @db.Decimal(10, 2)
+  comprimento                 Decimal                       @default(16.00) @db.Decimal(10, 2)
+  altura                      Decimal                       @default(2.00) @db.Decimal(10, 2)
+  largura                     Decimal                       @default(11.00) @db.Decimal(10, 2)
+  mercado_livre_id            String?                       @db.VarChar(255)
+  ml_status                   String?                       @default("Não Publicado") @db.VarChar(50)
+  tiktok_video_url            String?                       @db.VarChar(2048)
+  tiktok_product_id           String?                       @db.VarChar(255)
+  tiktok_status               String?                       @default("Não Publicado") @db.VarChar(50)
+  custo                       Decimal?                      @db.Decimal(10, 2)
+  ativo                       Boolean                       @default(true)
+  ml_category_id              String?                       @db.VarChar(255)
+  ml_attributes               Json?
+  id_subcategoria             Int?
+  active_ecommerce            Boolean                       @default(true)
+  id_externo                  String?                       @unique(map: "uk_produtos_id_externo") @db.VarChar(255)
+  preco_custo                 Decimal                       @default(0.00) @db.Decimal(10, 2)
+  ifood_id                    String?                       @unique(map: "ifood_id") @db.VarChar(255)
+  ifood_status                String?                       @default("AVAILABLE") @db.VarChar(50)
+  preco_ifood                 Decimal?                      @db.Decimal(10, 2)
+  ifood_serving               String?                       @default("NOT_APPLICABLE") @db.VarChar(50)
+  ifood_restricoes            String?                       @db.VarChar(255) 
+  tempo_duracao               Int?                          @default(60)
+  unidade                     produtos_unidade              @default(UN)
+  tipo_produto                produtos_tipo_produto         @default(FINAL)
+  estoque_minimo              Decimal?                      @default(0.000) @db.Decimal(10, 3)
+
+  // 🟢 DADOS FISCAIS DO PRODUTO (TRIBUTAÇÃO E REFORMA TRIBUTÁRIA)
+  origem                      String?                       @default("0") @db.VarChar(1) // 0-Nacional, 1-Estrangeira, etc.
+  ncm                         String?                       @db.VarChar(10)
+  cest                        String?                       @db.VarChar(10)
+  cfop_padrao                 String?                       @db.VarChar(5)
+  cst_icms                    String?                       @db.VarChar(4) // CSOSN para Simples ou CST para Normal
+  cst_pis_cofins              String?                       @db.VarChar(4)
+  cst_ipi                     String?                       @db.VarChar(4)
+  aliq_icms                   Decimal?                      @default(0.00) @db.Decimal(5, 2)
+  aliq_pis                    Decimal?                      @default(0.00) @db.Decimal(5, 2)
+  aliq_cofins                 Decimal?                      @default(0.00) @db.Decimal(5, 2)
+  aliq_iss                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Usado se for serviço
+  aliq_ibs                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Reforma Tributária
+  aliq_cbs                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Reforma Tributária
+
+  // RELACIONAMENTOS
+  AuditoriaProduto            AuditoriaProduto[]
+  MovimentacaoEstoque         MovimentacaoEstoque[]
+  avaliacoes                  avaliacoes[]
+  campanha_marketing_produtos campanha_marketing_produtos[]
+  carrinhos                   carrinhos[]
+  cupons_desconto             cupons_desconto[]
+  historico_precos            historico_precos[]
+  lista_desejos               lista_desejos[]
+  log_estoque                 log_estoque[]
+  ordens_producao             ordens_producao[]
+  composicao_filho            produto_composicao[]          @relation("RelacaoInsumo")
+  composicao_pai              produto_composicao[]          @relation("RelacaoProdutoFinal")
+  produto_subimagens          produto_subimagens[]
+  produto_visualizacoes       produto_visualizacoes[]
+  fornecedores                fornecedores?                 @relation(fields: [id_fornecedor], references: [id_fornecedor], map: "fk_produtos_fornecedor")
+  tenants                     tenants                       @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_produtos_tenants")
+  categorias                  categorias?                   @relation(fields: [id_categoria], references: [id_categoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_1")
+  marcas                      marcas?                       @relation(fields: [id_marca], references: [id_marca], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_2")
+  subcategorias               subcategorias?                @relation(fields: [id_subcategoria], references: [id_subcategoria], onDelete: NoAction, onUpdate: NoAction, map: "produtos_ibfk_subcategoria")
+  promocoes_automaticas       promocoes_automaticas[]
+  grupos_complemento          produto_grupos_complemento[]
+  complementos_como_opcao     produto_complementos[]
+  produto_variacoes           produto_variacoes[]
+  nota_fiscal_itens           nota_fiscal_itens[]
+
+  @@index([id_categoria], map: "id_categoria")
+  @@index([id_marca], map: "id_marca")
+  @@index([id_subcategoria], map: "id_subcategoria")
+  @@index([id_fornecedor], map: "idx_produto_fornecedor")
+  @@index([id_tenant], map: "fk_produtos_tenants")
+}
+
+  model produto_variacoes {
+    id_variacao    Int      @id @default(autoincrement())
+    id_produto     Int
+    id_tenant      Int
+    sku            String?  @db.VarChar(100)  // Código único da variação (ex: CAM-VER-M)
+    cor            String?  @db.VarChar(50)   // Ex: Verde, Vermelho
+    tamanho        String?  @db.VarChar(50)   // Ex: P, M, GG, 38, 40
+    estoque        Decimal  @default(0.000) @db.Decimal(10, 3)
+    preco_adicional Decimal @default(0.00) @db.Decimal(10, 2) // Se a GG for R$ 5 mais cara
+    imagem_url     String?  @db.VarChar(2048) // Foto específica da camisa vermelha (opcional)
+    ativo          Boolean  @default(true)
+
+    produtos       produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, map: "fk_variacao_produto")
+    tenants        tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_variacao_tenant")
+
+    @@index([id_produto], map: "idx_variacoes_produto")
+    @@index([id_tenant], map: "idx_variacoes_tenant")
+  }
+
+model usuarios {
+  id_usuario                    Int       @id @default(autoincrement())
+  id_tenant                     Int
+  nome_completo                 String    @db.VarChar(255)
+  email                         String    @db.VarChar(255)
+  hash_senha                    String    @db.VarChar(255)
+  endereco_criptografado        String?   @db.Text
+  telefone_criptografado        String?   @db.Text
+  cpf_criptografado             String?   @db.Text
+  data_nascimento_criptografada String?   @db.Text
+  data_criacao                  DateTime  @default(now()) @db.Timestamp(0)
+  reset_password_token          String?   @unique(map: "reset_password_token") @db.VarChar(255)
+  reset_password_expires        DateTime? @db.DateTime(0)
+  criado_em                     DateTime? @default(now()) @db.DateTime(0)
+  score_reputacao               Int?      @default(50)
+  total_pedidos_pagos           Int?      @default(0)
+  is_verified                   Boolean?  @default(false)
+
+  // --- RELAÇÕES EXCLUSIVAS DE CLIENTES ---
+  avaliacoes                  avaliacoes[]
+  carrinhos                   carrinhos[]
+  enderecos                   enderecos[]
+  financeiro_contas_receber   financeiro_contas_receber[]
+  lista_desejos               lista_desejos[]
+  pedidos                     pedidos[]
+  agendamentos_servicos agendamentos_servicos[]
+  transacoes_financeiras      transacoes_financeiras[]
+  tenants                     tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_usuarios_tenants")
+
+  @@unique([email, id_tenant], map: "uk_email_tenant")
+  @@index([id_tenant], map: "fk_usuarios_tenants")
+}
+
+model funcionarios {
+  id_funcionario         Int       @id @default(autoincrement())
+  id_tenant              Int
+  nome_completo          String    @db.VarChar(255)
+  email                  String    @db.VarChar(255)
+  hash_senha             String    @db.VarChar(255)
+  sessao_token          String?   @db.VarChar(255)
+  cpf_criptografado      String?   @db.Text
+  telefone_criptografado String?   @db.Text
+  role                   String    @default("ATENDENTE") @db.VarChar(50)
+  isAdmin                Boolean   @default(false)
+  codigo_acesso          String?   @unique(map: "codigo_acesso_func_unique") @db.VarChar(20)
+  ativo                  Boolean   @default(true)
+  criado_em              DateTime? @default(now()) @db.DateTime(0)
+
+  // 🟢 NOVOS CAMPOS PARA O PERFIL DO PROFISSIONAL (IMAGEM E TEXTOS)
+  imagem                 String?   @db.VarChar(512) // Guarda a URL da imagem
+  especialidade          String?   @db.VarChar(255)
+  bio                    String?   @db.Text
+  formacao               Json?     // Salva como array JSON: ["Graduação...", "Especialização..."]
+  atuacao                Json?     // Salva como array JSON: ["Ansiedade...", "Tratamento..."]
+  sobre                  Json?     // Salva como array JSON: ["Simone Vieira da Silva...", "Sua abordagem..."]
+
+  // Relação com a tabela de cargos personalizados
+  id_cargo               Int?      
+  cargos                 cargos?   @relation(fields: [id_cargo], references: [id_cargo], onDelete: SetNull)
+
+  // --- RELAÇÕES DE TRABALHO E GESTÃO ---
+  tenants                tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_funcionarios_tenants")
+  caixa_pdv              caixa_pdv[]
+  AuditoriaProduto       AuditoriaProduto[]
+  log_estoque            log_estoque[]
+  ordens_producao        ordens_producao[]
+  MovimentacaoEstoque    MovimentacaoEstoque[]
+  financeiro_baixas      financeiro_baixas[]
+  financeiro_contas_pagar financeiro_contas_pagar[]
+  agendamentos_servicos agendamentos_servicos[]
+  
+  @@unique([email, id_tenant], map: "uk_email_tenant_func")
+  @@index([id_tenant], map: "fk_funcionarios_tenants_idx")
+  @@index([id_cargo], map: "idx_funcionarios_cargo")
+}
+
+model cargos {
+  id_cargo     Int            @id @default(autoincrement())
+  id_tenant    Int
+  nome         String         @db.VarChar(100)
+  descricao    String?        @db.VarChar(255)
+  permissoes   Json           
+  
+  // A TRAVA MESTRA: Garante que o cargo do Dono não seja apagado nem modificado
+  is_dono      Boolean        @default(false)
+  
+  ativo        Boolean        @default(true)
+  criado_em    DateTime       @default(now()) @db.Timestamp(0)
+  
+  tenants      tenants        @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  funcionarios funcionarios[]
+
+  @@unique([nome, id_tenant], map: "uk_cargo_nome_tenant")
+  @@index([id_tenant], map: "idx_cargos_tenant")
+}
+
+model categorias {
+  id_categoria          Int                     @id @default(autoincrement())
+  id_tenant             Int
+  nome                  String                  @unique(map: "nome") @db.VarChar(255)
+  ifood_id              String?                 @unique(map: "ifood_id_cat") @db.VarChar(255) // 🟢 ADICIONADO PARA O IFOOD
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
+  subcategorias         subcategorias[]
+  id_impressora Int? // ID da impressora que vai receber esses itens
+  impressora    impressoras? @relation(fields: [id_impressora], references: [id_impressora], onDelete: SetNull)
+}
+
+model carrossel_slides {
+  id_slide   Int     @id @default(autoincrement())
+  id_tenant  Int?
+  imagem_url String  @db.VarChar(2048)
+  link_url   String  @db.VarChar(2048)
+  titulo     String? @db.VarChar(255)
+  subtitulo  String? @db.VarChar(255)
+  ativo      Boolean @default(true)
+  ordem      Int?    @default(0)
+}
+
+model destaques_categorias {
+  id_destaque Int     @id @default(autoincrement())
+  id_tenant   Int?
+  imagem_url  String  @db.VarChar(2048)
+  link_url    String  @db.VarChar(255)
+  titulo      String  @db.VarChar(255)
+  ativo       Boolean @default(true)
+  ordem       Int?    @default(0)
+}
+
+model marcas {
+  id_marca              Int                     @id @default(autoincrement())
+  id_tenant             Int
+  nome                  String                  @unique(map: "nome") @db.VarChar(255)
+  imagem_url            String?                 @db.VarChar(2048)
+  ativo                 Boolean                 @default(true)
+  id_externo            String?                 @unique(map: "uk_marcas_id_externo") @db.VarChar(255)
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
+}
+
+model configuracoes {
+  id        Int    @id @default(autoincrement())
+  id_tenant Int
+  chave     String @db.VarChar(255)
+  valor     String @db.Text
+
+  @@unique([chave, id_tenant])
+}
+
+model banners_laterais {
+  id_banner    Int                          @id @default(autoincrement())
+  id_tenant    Int?
+  titulo       String                       @db.VarChar(255)
+  imagem_url   String                       @db.VarChar(2048)
+  posicao      banners_laterais_posicao     @default(esquerda)
+  tipo_filtro  banners_laterais_tipo_filtro
+  valor_filtro String                       @db.VarChar(255)
+  ativo        Boolean                      @default(true)
+  link_url     String                       @db.VarChar(255)
+}
+
+model avaliacoes {
+  id_avaliacao   Int       @id @default(autoincrement())
+  id_tenant      Int?
+  id_produto     Int
+  id_usuario     Int
+  nota           Int
+  comentario     String?   @db.Text
+  data_avaliacao DateTime? @default(now()) @db.Timestamp(0)
+  imagem_url     String?   @db.VarChar(2048)
+  resposta_admin String?   @db.Text
+  data_resposta  DateTime? @db.DateTime(0)
+  produtos       produtos  @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "avaliacoes_ibfk_1")
+  usuarios       usuarios  @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "avaliacoes_ibfk_2")
+
+  @@index([id_produto], map: "id_produto")
+  @@index([id_usuario], map: "id_usuario")
+}
+
+model configuracoes_frete {
+  id        Int    @id @default(autoincrement())
+  id_tenant Int?
+  chave     String @db.VarChar(255)
+  valor     String @db.VarChar(255)
+
+  @@unique([chave, id_tenant])
+}
+
+model comunicados {
+  id_comunicado Int     @id @default(autoincrement())
+  id_tenant     Int
+  titulo        String
+  imagem_url    String
+  link_url      String?
+  ativo         Boolean @default(true)
+  estilos       String? @db.Text  // 🟢 Adicione esta linha para salvar o visual!
+  createdAt     DateTime @default(now())
+}
+
+model cupons_desconto {
+  id_cupom             Int                           @id @default(autoincrement())
+  id_tenant            Int?
+  codigo               String                        @unique(map: "codigo") @db.VarChar(50)
+  descricao            String?                       @db.VarChar(255)
+  tipo_desconto        cupons_desconto_tipo_desconto
+  valor                Decimal                       @db.Decimal(10, 2)
+  data_inicio          DateTime?                     @default(now()) @db.DateTime(0)
+  data_validade        DateTime                      @db.DateTime(0)
+  usos_maximos         Int?
+  usos_atuais          Int                           @default(0)
+  usos_por_user        Int?                          @default(1)
+  valor_minimo         Decimal?                      @default(0.00) @db.Decimal(10, 2)
+  alvo                 cupons_desconto_alvo          @default(TOTAL_CARRINHO)
+  id_produto_alvo      Int?
+  id_categoria_alvo    Int?
+  id_subcategoria_alvo Int?
+  id_marca_alvo        Int?
+  ativo                Boolean                       @default(true)
+  categorias           categorias?                   @relation(fields: [id_categoria_alvo], references: [id_categoria], onUpdate: NoAction, map: "fk_cupom_categoria")
+  marcas               marcas?                       @relation(fields: [id_marca_alvo], references: [id_marca], onUpdate: NoAction, map: "fk_cupom_marca")
+  produtos             produtos?                     @relation(fields: [id_produto_alvo], references: [id_produto], onUpdate: NoAction, map: "fk_cupom_produto")
+  subcategorias        subcategorias?                @relation(fields: [id_subcategoria_alvo], references: [id_subcategoria], onUpdate: NoAction, map: "fk_cupom_subcategoria")
+  pedidos              pedidos[]
+
+  @@index([id_subcategoria_alvo], map: "fk_cupom_subcategoria")
+  @@index([id_categoria_alvo], map: "idx_cupom_categoria")
+  @@index([id_marca_alvo], map: "idx_cupom_marca")
+  @@index([id_produto_alvo], map: "idx_cupom_produto")
+}
+
+model historico_precos {
+  id_historico   Int      @id @default(autoincrement())
+  id_produto     Int
+  preco_anterior Decimal  @db.Decimal(10, 2)
+  preco_novo     Decimal  @db.Decimal(10, 2)
+  data_alteracao DateTime @default(now()) @db.Timestamp(0)
+  produtos       produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_historico_precos_produto")
+
+  @@index([id_produto], map: "idx_id_produto")
+}
+
+model lista_desejos {
+  id        Int      @id @default(autoincrement())
+  id_tenant Int?
+  id_usuario Int
+  id_produto Int
+  data_adicao DateTime @default(now()) @db.Timestamp(0)
+  produtos   produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_lista_desejos_produto")
+  usuarios   usuarios @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "fk_lista_desejos_usuario")
+
+  @@unique([id_usuario, id_produto], map: "uk_usuario_produto")
+  @@index([id_produto], map: "fk_lista_desejos_produto")
+}
+
+model log_estoque {
+  id_log                 Int           @id @default(autoincrement())
+  id_produto             Int
+  quantidade_anterior    Decimal       @db.Decimal(10, 3)
+  quantidade_alterada    Decimal       @db.Decimal(10, 3)
+  quantidade_nova        Decimal       @db.Decimal(10, 3)
+  motivo                 String        @db.VarChar(255)
+  id_usuario_responsavel Int?
+  data_movimentacao      DateTime      @default(now()) @db.Timestamp(0)
+  produtos               produtos      @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_log_estoque_produto")
+  funcionarios           funcionarios? @relation(fields: [id_usuario_responsavel], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_log_estoque_funcionario")
+
+  @@index([id_usuario_responsavel], map: "fk_log_estoque_funcionario")
+  @@index([id_produto], map: "idx_id_produto")
+}
+
+model produto_subimagens {
+  id_subimagem Int      @id @default(autoincrement())
+  url          String   @db.VarChar(2048)
+  id_produto   Int
+  ordem        Int      @default(0)
+  produtos     produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_produto_subimagens_produto")
+
+  @@index([id_produto], map: "idx_id_produto_subimagem")
+}
+
+model DestaquesCategoria {
+  id_destaque  Int     @id @default(autoincrement())
+  titulo       String
+  imagem_url   String
+  tipo_filtro  String
+  valor_filtro String
+  ativo        Boolean @default(true)
+  ordem        Int     @default(0)
+}
+
+model metodos_envio {
+  id_metodo          Int                  @id @default(autoincrement())
+  id_tenant          Int?
+  nome               String               @db.VarChar(100)
+  tipo               String               @db.VarChar(50)
+  ativo              Boolean              @default(true)
+  prazo_base         String?              @db.VarChar(50)
+  valor_base         Decimal?             @db.Decimal(10, 2)
+  regras_frete_local regras_frete_local[]
+}
+
+model regras_frete_local {
+  id_regra      Int           @id @default(autoincrement())
+  id_metodo     Int
+  cep_inicio    String        @db.VarChar(10)
+  cep_fim       String        @db.VarChar(10)
+  peso_min      Decimal       @default(0.00) @db.Decimal(10, 2)
+  peso_max      Decimal       @db.Decimal(10, 2)
+  preco         Decimal       @db.Decimal(10, 2)
+  metodos_envio metodos_envio @relation(fields: [id_metodo], references: [id_metodo], onDelete: Cascade, onUpdate: NoAction, map: "fk_regras_frete_metodo")
+
+  @@index([id_metodo], map: "idx_regras_frete_metodo")
+}
+
+model lojas {
+  id_loja         Int      @id @default(autoincrement())
+  id_tenant       Int?
+  nome            String   @db.VarChar(255)
+  cep             String   @db.VarChar(10)
+  logradouro      String   @db.VarChar(255)
+  numero          String   @db.VarChar(20)
+  complemento     String?  @db.VarChar(100)
+  bairro          String   @db.VarChar(100)
+  cidade          String   @db.VarChar(100)
+  estado          String   @db.VarChar(50)
+  latitude        Float?   @db.Float
+  longitude       Float?   @db.Float
+  ativo           Boolean  @default(true)
+  hora_abertura   String?  @db.VarChar(10)
+  hora_fechamento String?  @db.VarChar(10)
+  abre_feriados   Boolean  @default(false)
+  dias_funcionamento String?  @default("0,1,2,3,4,5,6") @db.VarChar(50)
+  ifood_status    String?  @default("AVAILABLE") @db.VarChar(50) // 🟢 ADICIONADO PARA O IFOOD
+  criado_em       DateTime @default(now()) @db.Timestamp(0)
+  agendamentos_servicos agendamentos_servicos[]
+}
+
+model subcategorias {
+  id_subcategoria       Int                     @id @default(autoincrement())
+  id_tenant             Int
+  nome                  String                  @db.VarChar(255)
+  id_categoria          Int
+  cupons_desconto       cupons_desconto[]
+  produtos              produtos[]
+  promocoes_automaticas promocoes_automaticas[]
+  categorias            categorias              @relation(fields: [id_categoria], references: [id_categoria], onDelete: Cascade, onUpdate: NoAction, map: "subcategorias_ibfk_1")
+
+  @@index([id_categoria], map: "id_categoria")
+}
+
+model config_integracao {
+  id                   Int       @id @default(autoincrement())
+  ativo                Boolean   @default(false)
+  host                 String    @db.VarChar(255)
+  port                 Int       @default(1433)
+  user                 String    @db.VarChar(255)
+  password             String    @db.Text
+  database             String    @db.VarChar(255)
+  tabela_origem        String    @default("cditem") @db.VarChar(100)
+  ultima_sincronizacao DateTime?
+}
+
+model promocoes_automaticas {
+  id_promocao          Int                                 @id @default(autoincrement())
+  id_tenant            Int?
+  nome                 String                              @db.VarChar(255)
+  tipo_desconto        promocoes_automaticas_tipo_desconto
+  valor                Decimal                             @db.Decimal(10, 2)
+  data_inicio          DateTime                            @db.DateTime(0)
+  data_fim             DateTime                            @db.DateTime(0)
+  ativo                Boolean?                            @default(true)
+  alvo                 promocoes_automaticas_alvo
+  id_produto_alvo      Int?
+  id_categoria_alvo    Int?
+  id_subcategoria_alvo Int?
+  id_marca_alvo        Int?
+  prioridade           Int?                                @default(1)
+  criado_em            DateTime?                           @default(now()) @db.DateTime(0)
+  categorias           categorias?                         @relation(fields: [id_categoria_alvo], references: [id_categoria], onUpdate: NoAction, map: "fk_promo_categoria")
+  marcas               marcas?                             @relation(fields: [id_marca_alvo], references: [id_marca], onUpdate: NoAction, map: "fk_promo_marca")
+  produtos             produtos?                           @relation(fields: [id_produto_alvo], references: [id_produto], onUpdate: NoAction, map: "fk_promo_produto")
+  subcategorias        subcategorias?                      @relation(fields: [id_subcategoria_alvo], references: [id_subcategoria], onUpdate: NoAction, map: "fk_promo_subcategoria")
+
+  @@index([id_categoria_alvo], map: "fk_promo_categoria")
+  @@index([id_marca_alvo], map: "fk_promo_marca")
+  @@index([id_produto_alvo], map: "fk_promo_produto")
+  @@index([id_subcategoria_alvo], map: "fk_promo_subcategoria")
+  @@index([ativo], map: "idx_promo_ativo")
+  @@index([data_inicio, data_fim], map: "idx_promo_datas")
+}
+
+model menus_rodape {
+  id_link   Int     @id @default(autoincrement())
+  id_tenant Int?
+  titulo    String  @db.VarChar(255)
+  url       String  @db.VarChar(255)
+  coluna    String  @db.VarChar(50)
+  ordem     Int     @default(0)
+  ativo     Boolean @default(true)
+}
+
+model produto_visualizacoes {
+  id         Int      @id @default(autoincrement())
+  id_produto Int
+  data       DateTime @db.Date
+  quantidade Int      @default(1)
+  id_tenant  Int      @default(1)
+  produtos   produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_produto_visualizacoes_produto")
+  tenants    tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_visualizacoes_tenant")
+
+  @@unique([id_produto, data], map: "uk_produto_data")
+  @@index([data], map: "idx_data_view")
+  @@index([id_tenant], map: "fk_visualizacoes_tenant")
+}
+
+model fornecedores {
+  id_fornecedor           Int                       @id @default(autoincrement())
+  id_tenant               Int?
+  nome_loja               String                    @db.VarChar(255)
+  documento               String?                   @db.VarChar(20)
+  shopee_loja_url         String?                   @db.VarChar(2048)
+  contato_whats           String?                   @db.VarChar(20)
+  email                   String?                   @db.VarChar(100)
+  responsavel             String?                   @db.VarChar(100)
+  endereco                String?                   @db.VarChar(255)
+  reputacao               Float?                    @default(0) @db.Float
+  prazo_medio             Int?
+  status                  String?                   @default("Ativo") @db.VarChar(20)
+  criado_em               DateTime?                 @default(now()) @db.Timestamp(0)
+  financeiro_contas_pagar financeiro_contas_pagar[]
+  notas_fiscais           notas_fiscais[]
+  produtos                produtos[]
+}
+
+model campanha_marketing_produtos {
+  id_campanha         Int
+  id_produto          Int
+  preco_promocional   Decimal?            @db.Decimal(10, 2)
+  campanhas_marketing campanhas_marketing @relation(fields: [id_campanha], references: [id_campanha], onDelete: Cascade, onUpdate: NoAction, map: "campanha_marketing_produtos_ibfk_1")
+  produtos            produtos            @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "campanha_marketing_produtos_ibfk_2")
+
+  @@id([id_campanha, id_produto])
+  @@index([id_produto], map: "id_produto")
+}
+
+model campanhas_marketing {
+  id_campanha                 Int                           @id @default(autoincrement())
+  id_tenant                   Int?
+  nome                        String                        @db.VarChar(255)
+  slug                        String                        @unique(map: "slug") @db.VarChar(255)
+  descricao                   String?                       @db.Text
+  banner_desktop              String?                       @db.VarChar(2048)
+  banner_mobile               String?                       @db.VarChar(2048)
+  cor_tema                    String?                       @default("#0d6efd") @db.VarChar(7)
+  data_inicio                 DateTime                      @db.DateTime(0)
+  data_fim                    DateTime                      @db.DateTime(0)
+  ativo                       Boolean?                      @default(true)
+  cliques                     Int?                          @default(0)
+  vendas_geradas              Int?                          @default(0)
+  faturamento_gerado          Decimal?                      @default(0.00) @db.Decimal(10, 2)
+  imagem_url                  String?                       @db.Text
+  campanha_marketing_produtos campanha_marketing_produtos[]
+}
+
+model SiteConfig {
+  id        Int    @id @default(autoincrement())
+  id_tenant Int
+  chave     String @unique
+  valor     Json
+}
+
+model IfoodAuth {
+  id           Int       @id @default(autoincrement())
+  id_tenant    Int?
+  merchantId   String    @unique(map: "merchantId") @db.VarChar(255)
+  accessToken  String    @db.Text
+  refreshToken String    @db.Text
+  expiresIn    DateTime  @db.DateTime(0)
+  updatedAt    DateTime? @default(now()) @db.DateTime(0)
+  clientId     String?   @db.Text
+  clientSecret String?   @db.Text
+}
+
+model caixa_pdv {
+  id_caixa           Int                  @id @default(autoincrement())
+  id_tenant          Int
+  id_usuario         Int
+  data_abertura      DateTime             @default(now()) @db.DateTime(0)
+  data_fechamento    DateTime?            @db.DateTime(0)
+  saldo_inicial      Decimal              @db.Decimal(10, 2)
+  saldo_final        Decimal?             @db.Decimal(10, 2)
+  saldo_sistema      Decimal              @default(0.00) @db.Decimal(10, 2)
+  status             String               @default("ABERTO") @db.VarChar(20)
+  observacoes        String?              @db.Text
+  funcionarios       funcionarios         @relation(fields: [id_usuario], references: [id_funcionario], map: "fk_caixa_pdv_funcionario")
+  tenants            tenants              @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_caixa_tenants")
+  financeiro_baixas  financeiro_baixas[]
+  movimentacao_caixa movimentacao_caixa[]
+  pedidos            pedidos[]
+
+  @@index([id_usuario], map: "idx_caixa_pdv_funcionario")
+  @@index([id_tenant], map: "fk_caixa_tenants")
+}
+
+model movimentacao_caixa {
+  id_movimentacao Int       @id @default(autoincrement())
+  id_caixa        Int
+  tipo            String    @db.VarChar(20)
+  valor           Decimal   @db.Decimal(10, 2)
+  motivo          String?   @db.VarChar(255)
+  data_hora       DateTime  @default(now()) @db.DateTime(0)
+  caixa_pdv       caixa_pdv @relation(fields: [id_caixa], references: [id_caixa], onDelete: Cascade, map: "fk_movimentacao_caixa")
+
+  @@index([id_caixa], map: "idx_movimentacao_caixa")
+}
+
+model MovimentacaoEstoque {
+  id_movimentacao Int           @id @default(autoincrement())
+  id_produto      Int
+  tipo            String
+  quantidade      Decimal       @db.Decimal(10, 3)
+  saldo_momento   Decimal       @db.Decimal(10, 3)
+  motivo          String
+  origem_destino  String?
+  usuario_id      Int?
+  data            DateTime      @default(now())
+  produtos        produtos      @relation(fields: [id_produto], references: [id_produto])
+  funcionarios    funcionarios? @relation(fields: [usuario_id], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_movimentacao_estoque_funcionario")
+
+  @@index([id_produto], map: "MovimentacaoEstoque_id_produto_fkey")
+  @@index([usuario_id], map: "fk_movimentacao_estoque_funcionario")
+}
+
+model AuditoriaProduto {
+  id_auditoria   Int           @id @default(autoincrement())
+  id_produto     Int
+  id_usuario     Int?
+  acao           String        @db.VarChar(50)
+  campo_alterado String?       @db.VarChar(100)
+  valor_antigo   String?       @db.Text
+  valor_novo     String?       @db.Text
+  data_alteracao DateTime      @default(now()) @db.Timestamp(0)
+  id_tenant      Int           @default(1)
+  produtos       produtos      @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_auditoria_produtos")
+  tenants        tenants       @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_auditoria_tenant")
+  funcionarios   funcionarios? @relation(fields: [id_usuario], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_auditoria_funcionarios")
+
+  @@index([id_produto], map: "idx_auditoria_produto")
+  @@index([id_usuario], map: "idx_auditoria_funcionario")
+  @@index([id_tenant], map: "fk_auditoria_tenant")
+}
+
+model gateway_rules {
+  method     String   @db.VarChar(50)
+  provider   String   @db.VarChar(50)
+  is_active  Boolean  @default(true)
+  updated_at DateTime @default(now()) @db.Timestamp(0)
+  id_tenant  Int      @default(1)
+
+  @@id([method, id_tenant])
+}
+
+model transacoes_financeiras {
+  id_transacao      Int                 @id @default(autoincrement())
+  id_pedido         Int?
+  id_usuario        Int
+  gateway_provider  String
+  gateway_id        String
+  tipo              String
+  valor_bruto       Decimal             @db.Decimal(10, 2)
+  valor_taxa        Decimal             @db.Decimal(10, 2)
+  valor_liquido     Decimal             @db.Decimal(10, 2)
+  data_criacao      DateTime            @default(now())
+  id_tenant         Int                 @default(1)
+  financeiro_baixas financeiro_baixas[]
+  pedidos           pedidos?            @relation(fields: [id_pedido], references: [id_pedido], map: "fk_transacoes_pedidos")
+  tenants           tenants             @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_transacoes_tenant")
+  usuarios          usuarios            @relation(fields: [id_usuario], references: [id_usuario], map: "fk_transacoes_usuarios")
+
+  @@index([id_pedido], map: "fk_transacoes_pedidos")
+  @@index([id_usuario], map: "fk_transacoes_usuarios")
+  @@index([gateway_provider, gateway_id], map: "idx_gateway_provider_id")
+  @@index([id_tenant], map: "fk_transacoes_tenant")
+}
+
+model financeiro_baixas {
+  id                    Int                               @id @default(autoincrement())
+  id_tenant             Int
+  tipo                  financeiro_baixas_tipo
+  valor                 Decimal                           @db.Decimal(10, 2)
+  juros                 Decimal                           @default(0.00) @db.Decimal(10, 2)
+  multa                 Decimal                           @default(0.00) @db.Decimal(10, 2)
+  desconto              Decimal                           @default(0.00) @db.Decimal(10, 2)
+  valor_total_movimento Decimal                           @db.Decimal(10, 2)
+  data_baixa            DateTime                          @default(now())
+  forma_pagamento       financeiro_baixas_forma_pagamento
+  id_conta_pagar        Int?
+  id_conta_receber      Int?
+  id_caixa_pdv          Int?
+  id_transacao          Int?
+  criado_por            Int?
+  observacao            String?                           @db.Text
+  caixa_pdv             caixa_pdv?                        @relation(fields: [id_caixa_pdv], references: [id_caixa], map: "fk_fb_caixa")
+  financeiro_contas_pagar financeiro_contas_pagar?          @relation(fields: [id_conta_pagar], references: [id], onDelete: Cascade, map: "fk_fb_conta_pagar")
+  financeiro_contas_receber financeiro_contas_receber?      @relation(fields: [id_conta_receber], references: [id], onDelete: Cascade, map: "fk_fb_conta_receber")
+  transacoes_financeiras  transacoes_financeiras?           @relation(fields: [id_transacao], references: [id_transacao], map: "fk_fb_transacao")
+  funcionarios          funcionarios?                     @relation(fields: [criado_por], references: [id_funcionario], map: "fk_fb_funcionario")
+
+  @@index([id_conta_pagar], map: "fk_fb_conta_pagar")
+  @@index([id_conta_receber], map: "fk_fb_conta_receber")
+  @@index([data_baixa], map: "idx_fb_data")
+  @@index([id_caixa_pdv], map: "fk_fb_caixa")
+  @@index([id_transacao], map: "fk_fb_transacao")
+  @@index([criado_por], map: "fk_fb_funcionario")
+}
+
+model financeiro_categorias {
+  id                        Int                         @id @default(autoincrement())
+  id_tenant                 Int
+  nome                      String                      @db.VarChar(100)
+  tipo                      financeiro_categorias_tipo
+  descricao                 String?                     @db.VarChar(255)
+  ativo                     Boolean                     @default(true)
+  financeiro_contas_pagar   financeiro_contas_pagar[]
+  financeiro_contas_receber financeiro_contas_receber[]
+}
+
+model financeiro_contas_pagar {
+  id                    Int                            @id @default(autoincrement())
+  id_tenant             Int
+  id_loja               Int?
+  descricao             String                         @db.VarChar(255)
+  valor_total           Decimal                        @db.Decimal(10, 2)
+  valor_pago            Decimal                        @default(0.00) @db.Decimal(10, 2)
+  saldo_restante        Decimal                        @db.Decimal(10, 2)
+  data_competencia      DateTime                       @db.Date
+  data_vencimento       DateTime                       @db.Date
+  data_liquidacao       DateTime?
+  status                financeiro_contas_pagar_status @default(PENDENTE)
+  id_fornecedor         Int?
+  id_categoria          Int?
+  parcela_numero        Int?                           @default(1)
+  parcela_total         Int?                           @default(1)
+  grupo_uuid            String?                        @db.VarChar(36)
+  criado_em             DateTime                       @default(now())
+  atualizado_em         DateTime                       @updatedAt
+  criado_por            Int?
+  financeiro_baixas     financeiro_baixas[]
+  financeiro_categorias financeiro_categorias?         @relation(fields: [id_categoria], references: [id], map: "fk_fcp_categoria")
+  fornecedores          fornecedores?                  @relation(fields: [id_fornecedor], references: [id_fornecedor], map: "fk_fcp_fornecedor")
+  funcionarios          funcionarios?                  @relation(fields: [criado_por], references: [id_funcionario], map: "fk_fcp_funcionario")
+
+  @@index([id_categoria], map: "fk_fcp_categoria")
+  @@index([id_fornecedor], map: "idx_fcp_fornecedor")
+  @@index([status], map: "idx_fcp_status")
+  @@index([data_vencimento], map: "idx_fcp_vencimento")
+  @@index([criado_por], map: "fk_fcp_funcionario")
+}
+
+model financeiro_contas_receber {
+  id                    Int                              @id @default(autoincrement())
+  id_tenant             Int
+  id_loja               Int?
+  descricao             String                           @db.VarChar(255)
+  valor_total           Decimal                          @db.Decimal(10, 2)
+  valor_recebido        Decimal                          @default(0.00) @db.Decimal(10, 2)
+  saldo_restante        Decimal                          @db.Decimal(10, 2)
+  data_competencia      DateTime                         @db.Date
+  data_vencimento       DateTime                         @db.Date
+  data_liquidacao       DateTime?
+  status                financeiro_contas_receber_status @default(PENDENTE)
+  id_usuario            Int?
+  id_pedido             Int?
+  id_categoria          Int?
+  parcela_numero        Int?                             @default(1)
+  parcela_total         Int?                             @default(1)
+  criado_em             DateTime                         @default(now())
+  atualizado_em         DateTime                         @updatedAt
+  financeiro_baixas     financeiro_baixas[]
+  financeiro_categorias financeiro_categorias?           @relation(fields: [id_categoria], references: [id], map: "fk_fcr_categoria")
+  pedidos               pedidos?                         @relation(fields: [id_pedido], references: [id_pedido], map: "fk_fcr_pedido")
+  usuarios              usuarios?                        @relation(fields: [id_usuario], references: [id_usuario], map: "fk_fcr_usuario")
+
+  @@index([id_categoria], map: "fk_fcr_categoria")
+  @@index([id_pedido], map: "idx_fcr_pedido")
+  @@index([status], map: "idx_fcr_status")
+  @@index([data_vencimento], map: "idx_fcr_vencimento")
+  @@index([id_usuario], map: "fk_fcr_usuario")
+}
+
+model ordens_producao {
+  id_ordem      Int           @id @default(autoincrement())
+  id_produto    Int
+  quantidade    Decimal       @db.Decimal(10, 3)
+  id_usuario    Int?
+  data_producao DateTime?     @default(now()) @db.Timestamp(0)
+  produtos      produtos      @relation(fields: [id_produto], references: [id_produto], onDelete: NoAction, onUpdate: NoAction, map: "fk_op_produto")
+  funcionarios  funcionarios? @relation(fields: [id_usuario], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_op_funcionario")
+
+  @@index([id_produto], map: "fk_op_produto")
+  @@index([id_usuario], map: "fk_op_funcionario")
+}
+
+model produto_composicao {
+  id_composicao         Int      @id @default(autoincrement())
+  id_produto_final      Int
+  id_insumo             Int
+  quantidade_necessaria Decimal  @db.Decimal(10, 3)
+  insumo                produtos @relation("RelacaoInsumo", fields: [id_insumo], references: [id_produto], onDelete: Cascade, map: "fk_composicao_insumo")
+  produto_final         produtos @relation("RelacaoProdutoFinal", fields: [id_produto_final], references: [id_produto], onDelete: Cascade, map: "fk_composicao_produto_final")
+
+  @@index([id_insumo], map: "idx_insumo")
+  @@index([id_produto_final], map: "idx_produto_final")
+}
+
+model tenants {
+  id                  Int       @id @default(autoincrement())
+  slug                String    @unique(map: "uk_tenant_slug") @db.VarChar(255)
+  nome_fantasia       String    @db.VarChar(255)
+  razao_social        String?   @db.VarChar(255)
+  documento           String?   @db.VarChar(20)
+  telefone_contato    String?   @db.VarChar(20)
+  email_contato       String?   @db.VarChar(255)
+  email               String?   @db.VarChar(255)
+  hash_senha          String?   @db.VarChar(255)
+  sessao_token          String?   @db.VarChar(255)
+  
+  // 🟢 NOVO CAMPO DE IMAGEM NO TENANT (para Logo / Banner do Tenant)
+  imagem              String?   @db.VarChar(512) // Guarda a URL da imagem da empresa/clínica
+
+  // Campo de Role Universal para o Dono
+  role                String?   @default("PROPRIETÁRIO") @db.VarChar(50)
+  
+  plano               String?   @default("TRIAL") @db.VarChar(50)
+  status_assinatura   String?   @default("ATIVO") @db.VarChar(50)
+  data_vencimento     DateTime? @db.Date
+  gateway_customer_id String?   @db.VarChar(255)
+  id_assinatura_ext   String?   @db.VarChar(255)
+  limite_produtos     Int?      @default(50)
+  limite_usuarios     Int?      @default(2)
+  ativo               Boolean?  @default(true)
+  criado_em           DateTime? @default(now()) @db.Timestamp(0)
+  dominio_customizado String?   @unique @db.VarChar(255)
+
+  aiConfiguracoes        AiConfiguracoes?
+  
+  // Relacionamentos
+  AuditoriaProduto       AuditoriaProduto[]
+  api_keys               api_keys[]
+  caixa_pdv              caixa_pdv[]
+  faturas_saas           faturas_saas[]
+  pedido_items           pedido_items[]
+  pedidos                pedidos[]
+  produto_visualizacoes  produto_visualizacoes[]
+  produtos               produtos[]
+  tenant_webhooks        tenant_webhooks[]
+  transacoes_financeiras transacoes_financeiras[]
+  usuarios               usuarios[]
+  funcionarios           funcionarios[]
+  cargos                 cargos[]
+  produto_grupos_complemento produto_grupos_complemento[]
+  agendamentos_servicos agendamentos_servicos[]
+  
+  // 🟢 RELAÇÕES DO WHATSAPP
+  whatsapp_contatos      WhatsappContatos[]
+  whatsapp_mensagens     WhatsappMensagens[]
+  agendamentos           Agendamento[]
+  respostas_rapidas      RespostasRapidas[]
+  produto_variacoes      produto_variacoes[]
+
+  configuracoes_fiscais configuracoes_fiscais?
+  notas_fiscais          notas_fiscais[]
+  mesas mesas[]
+}
+
+model tenant_webhooks {
+  id        Int      @id @default(autoincrement())
+  id_tenant Int
+  url       String   @db.VarChar(2048)
+  evento    String   @default("pedido.pago") @db.VarChar(50)
+  ativo     Boolean  @default(true)
+  criado_em DateTime @default(now()) @db.Timestamp(0)
+  tenants   tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@index([id_tenant], map: "idx_webhook_tenant")
+}
+
+model api_keys {
+  id         Int       @id @default(autoincrement())
+  tenant_id  Int
+  nome       String    @db.VarChar(255)
+  chave      String    @unique @db.VarChar(255)
+  ativo      Boolean   @default(true)
+  permissoes Json?
+  ultimo_uso DateTime? @db.Timestamp(0)
+  criado_em  DateTime? @default(now()) @db.Timestamp(0)
+  tenant     tenants   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+
+  @@index([tenant_id])
+}
+
+model faturas_saas {
+  id             Int       @id @default(autoincrement())
+  tenant_id      Int
+  descricao      String?   @db.VarChar(255)
+  valor          Int
+  status         String    @default("PENDENTE") @db.VarChar(50)
+  external_id    String?   @unique @db.VarChar(255)
+  pix_copia_cola String?   @db.Text
+  url_pagamento  String?   @db.VarChar(500)
+  criado_em      DateTime  @default(now()) @db.Timestamp(0)
+  pago_em        DateTime? @db.Timestamp(0)
+  tenant         tenants   @relation(fields: [tenant_id], references: [id])
+
+  @@index([tenant_id], map: "faturas_saas_tenant_id_fkey")
+}
+
+model Planos {
+  id              Int      @id @default(autoincrement())
+  nome            String
+  preco_mensal    Decimal  @db.Decimal(10, 2)
+  dias_teste      Int      @default(7)
+  limite_produtos Int      @default(100)
+  limite_usuarios Int      @default(1)
+  destaque        Boolean  @default(false)
+  ativo           Boolean  @default(true)
+  descricao       String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ==========================================
+// 📱 SISTEMA DE CHAT DO WHATSAPP (CRM)
+// ==========================================
+
+model WhatsappContatos {
+  jid           String      @db.VarChar(255)
+  id_tenant     Int
+  nome          String?     @db.VarChar(255)
+  pictureUrl    String?     @db.VarChar(1024)
+  recado        String?     @db.VarChar(255)
+  responsavelId Int?
+  status        String      @default("pendentes") @db.VarChar(50)
+  
+  createdAt     DateTime    @default(now())
+  
+  mensagens     WhatsappMensagens[]
+  agendamentos  Agendamento[]
+  tenants       tenants     @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@id([jid, id_tenant])
+  @@index([id_tenant], map: "idx_whats_contatos_tenant")
+}
+
+model WhatsappMensagens {
+  id         Int      @id @default(autoincrement())
+  id_tenant  Int
+  whatsappId String   @db.VarChar(255) 
+  remoteJid  String   @db.VarChar(255) 
+  conteudo   String   @db.Text
+  fromMe     Boolean  
+  tipo       String   @default("text") @db.VarChar(50) 
+  data_envio DateTime @default(now())
+  lida       Boolean  @default(false)
+  
+  contato    WhatsappContatos @relation(fields: [remoteJid, id_tenant], references: [jid, id_tenant], onDelete: Cascade)
+  tenants    tenants          @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@unique([whatsappId, id_tenant], map: "uk_whats_msg_id")
+  @@index([remoteJid, id_tenant], map: "idx_whats_msg_contato")
+  @@index([id_tenant], map: "idx_whats_msg_tenant")
+}
+
+model RespostasRapidas {
+  id         Int      @id @default(autoincrement())
+  id_tenant  Int
+  atalho     String   @db.VarChar(50)
+  mensagem   String   @db.Text
+  criado_em  DateTime @default(now())
+
+  tenant     tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  
+  @@map("respostas_rapidas")
+}
+
+model agendamentos_servicos {
+  id_agendamento Int      @id @default(autoincrement())
+  id_tenant      Int
+  id_usuario     Int      // Cliente que agendou
+  id_funcionario Int?     // Profissional selecionado (opcional caso a loja distribua)
+  id_loja        Int      // Local do serviço
+  id_pedido      Int?     @unique // Vínculo 1:1 com o seu sistema de pagamentos atual
+  data_inicio    DateTime @db.DateTime(0)
+  data_fim       DateTime @db.DateTime(0)
+  status         String   @default("PENDENTE") @db.VarChar(50) // PENDENTE, CONFIRMADO, CANCELADO, CONCLUIDO
+  observacoes    String?  @db.Text
+  criado_em      DateTime @default(now()) @db.Timestamp(0)
+
+  // Relações
+  tenants        tenants       @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  usuarios       usuarios      @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade)
+  funcionarios   funcionarios? @relation(fields: [id_funcionario], references: [id_funcionario], onDelete: SetNull)
+  lojas          lojas         @relation(fields: [id_loja], references: [id_loja], onDelete: Cascade)
+  pedidos        pedidos?      @relation(fields: [id_pedido], references: [id_pedido], onDelete: SetNull)
+
+  @@index([id_tenant], map: "idx_agenda_serv_tenant")
+  @@index([id_usuario], map: "idx_agenda_serv_usuario")
+  @@index([id_funcionario], map: "idx_agenda_serv_func")
+  @@index([id_loja], map: "idx_agenda_serv_loja")
+  @@index([data_inicio, data_fim], map: "idx_agenda_serv_datas")
+}
+
+model Agendamento {
+  id          Int      @id @default(autoincrement())
+  id_tenant   Int
+  titulo      String
+  inicio      DateTime
+  fim         DateTime
+  observacoes String?  @db.Text
+  clienteJid  String
+  createdAt   DateTime @default(now())
+  
+  WhatsappContatos WhatsappContatos @relation(fields: [clienteJid, id_tenant], references: [jid, id_tenant], onDelete: Cascade)
+  tenants          tenants          @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@index([clienteJid, id_tenant], map: "idx_agenda_contato")
+  @@index([id_tenant], map: "idx_agenda_tenant")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum banners_laterais_posicao {
+  esquerda
+  direita
+}
+
+enum cupons_desconto_tipo_desconto {
+  PERCENTUAL
+  FIXO
+}
+
+enum promocoes_automaticas_tipo_desconto {
+  PERCENTUAL
+  FIXO
+}
+
+enum promocoes_automaticas_alvo {
+  TOTAL_CARRINHO
+  FRETE
+  PRODUTO
+  CATEGORIA
+  SUBCATEGORIA
+  MARCA
+}
+
+enum cupons_desconto_alvo {
+  TOTAL_CARRINHO
+  FRETE
+  PRODUTO
+  CATEGORIA
+  SUBCATEGORIA
+  MARCA
+}
+
+enum banners_laterais_tipo_filtro {
+  categoria
+  marca
+  desconto
+  produto
+  subcategoria
+  url
+}
+
+enum produtos_unidade {
+  UN
+  KG
+  G
+  M
+  CM
+  MM
+  L
+  ML
+  PCT
+  CX
+  FD
+  RL
+  PAR
+  M2
+  M3
+}
+
+enum financeiro_baixas_tipo {
+  RECEITA
+  DESPESA
+}
+
+enum financeiro_categorias_tipo {
+  RECEITA
+  DESPESA
+}
+
+enum financeiro_baixas_forma_pagamento {
+  DINHEIRO
+  PIX
+  BOLETO
+  CARTAO_CREDITO
+  CARTAO_DEBITO
+  TRANSFERENCIA
+  OUTRO
+}
+
+enum financeiro_contas_pagar_status {
+  PENDENTE
+  PARCIALMENTE_PAGO
+  PAGO
+  VENCIDO
+  CANCELADO
+}
+
+enum financeiro_contas_receber_status {
+  PENDENTE
+  PARCIALMENTE_PAGO
+  PAGO
+  VENCIDO
+  CANCELADO
+}
+
+enum produtos_tipo_produto {
+  FINAL
+  INSUMO
+  MISTO
+  CONSUMO_INTERNO
+  SERVICO
+}
+
+model produto_grupos_complemento {
+  id_grupo      Int      @id @default(autoincrement())
+  id_produto    Int      // O produto "Pai" (ex: Combo Burger)
+  id_tenant     Int
+  nome          String   @db.VarChar(100) // Ex: "Escolha sua bebida"
+  minimo        Int      @default(0)
+  maximo        Int      @default(1)
+  ordem         Int      @default(0)
+  tipo_grupo  String   @default("CHOICE")
+  ifood_id      String?  @db.VarChar(255) // Para salvar o UUID do grupo gerado pelo iFood
+
+  produtos      produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade)
+  tenants       tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  complementos  produto_complementos[]
+
+  @@index([id_produto])
+  @@index([id_tenant])
+}
+
+model produto_complementos {
+  id_complemento Int     @id @default(autoincrement())
+  id_grupo       Int
+  id_produto_add Int     // O produto que está sendo listado como opção (ex: Coca-Cola)
+  preco_adicional Decimal @default(0.00) @db.Decimal(10, 2)
+  ifood_id       String?  @db.VarChar(255) 
+
+  grupo          produto_grupos_complemento @relation(fields: [id_grupo], references: [id_grupo], onDelete: Cascade)
+  produto_add    produtos @relation(fields: [id_produto_add], references: [id_produto], onDelete: Cascade)
+
+  @@index([id_grupo])
+  @@index([id_produto_add])
+}
+
+model AiConfiguracoes {
+  id                      Int      @id @default(autoincrement())
+  id_tenant               Int      @unique // 🟢 Garante 1 config única por loja (Tenant)
+
+  // 🟢 Configurações do Motor de IA
+  provedor_ia             String   @default("GROQ") @db.VarChar(50) 
+  groq_api_key            String?
+  gemini_api_key          String?
+  deepseek_api_key        String?
+  
+  // Status e Comportamento Macro
+  ia_ativada              Boolean  @default(true)
+  ia_auto_atendimento     Boolean  @default(false)
+  modo_apenas_agendamento Boolean  @default(false) // 🟢 Ativa a IA Recepcionista
+  
+  // Personalização do Agente
+  nome_agente             String   @default("Chico") @db.VarChar(100)
+  personalidade           String   @default("Neutro e Direto") @db.VarChar(100)
+  ramo_loja               String   @default("Restaurante / Lanches") @db.VarChar(150)
+  
+  // Comportamento Micro
+  tempo_resposta          Int      @default(3) // Tempo de delay em segundos
+  
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  // Relacionamento com a tabela tenants
+  tenants                 tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@index([id_tenant], map: "idx_aiconfig_tenant")
+}
+
+model configuracoes_fiscais {
+  id_config           Int      @id @default(autoincrement())
+  id_tenant           Int      @unique
+  
+  // Dados do Emitente
+  cnpj                String?  @db.VarChar(14)
+  razao_social        String?  @db.VarChar(255)
+  inscricao_estadual  String?  @db.VarChar(50)
+  inscricao_municipal String?  @db.VarChar(50)
+  regime_tributario   String?  @default("SIMPLES_NACIONAL") @db.VarChar(50) 
+  
+  // Configurações de Emissão
+  ambiente            String   @default("HOMOLOGACAO") @db.VarChar(20) // HOMOLOGACAO ou PRODUCAO
+  
+  // Contadores para SEFAZ (Produtos)
+  serie_nfe           Int      @default(1)
+  serie_nfce          Int      @default(1)
+  serie_nfae          Int      @default(1)
+  proximo_numero_nfe  Int      @default(1)
+  proximo_numero_nfce Int      @default(1)
+  proximo_numero_nfae Int      @default(1)
+
+  // Contadores para Prefeitura (Serviços - NFS-e)
+  serie_rps           String   @default("1") @db.VarChar(10) // RPS geralmente aceita letras
+  proximo_numero_rps  Int      @default(1)
+  codigo_municipio    String?  @db.VarChar(10) // Código IBGE da cidade para a NFS-e
+  
+  // Certificado Digital (A1)
+  certificado_base64  String?  @db.LongText // Armazena o .pfx em base64 (ou mude para URL se usar bucket)
+  senha_certificado   String?  @db.VarChar(255)
+  vencimento_cert     DateTime? @db.Date
+
+  atualizado_em       DateTime @updatedAt
+
+  tenants             tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+}
+
+enum nota_fiscal_operacao {
+  ENTRADA
+  SAIDA
+}
+
+model notas_fiscais {
+  id_nota         Int      @id @default(autoincrement())
+  id_tenant       Int
+  id_pedido       Int?     @unique // Pode ser nulo se for nota de ENTRADA
+  id_fornecedor   Int?     // Vínculo com fornecedor para notas de ENTRADA
+  
+  tipo_operacao   nota_fiscal_operacao @default(SAIDA) // Entrada ou Saída
+  tipo_nota       String   @db.VarChar(10) // NFE, NFCE, NFSE, NFAE
+  numero_nota     Int?
+  serie           Int?
+  chave_acesso    String?  @unique @db.VarChar(50) 
+  
+  status          String   @default("RASCUNHO") @db.VarChar(50) 
+  motivo_status   String?  @db.VarChar(255) 
+  
+  xml_gerado      String?  @db.LongText
+  protocolo_sefaz String?  @db.VarChar(100)
+  url_danfe       String?  @db.VarChar(2048) 
+  
+  // 🟢 VALORES COMPOSITIVOS DA NOTA E TOTAIS
+  valor_produtos  Decimal  @default(0.00) @db.Decimal(10, 2)
+  valor_frete     Decimal  @default(0.00) @db.Decimal(10, 2)
+  valor_seguro    Decimal  @default(0.00) @db.Decimal(10, 2)
+  valor_desconto  Decimal  @default(0.00) @db.Decimal(10, 2)
+  valor_total     Decimal  @db.Decimal(10, 2) // Soma de tudo
+  
+  total_icms      Decimal? @default(0.00) @db.Decimal(10, 2)
+  total_pis       Decimal? @default(0.00) @db.Decimal(10, 2)
+  total_cofins    Decimal? @default(0.00) @db.Decimal(10, 2)
+  total_ipi       Decimal? @default(0.00) @db.Decimal(10, 2)
+  total_iss       Decimal? @default(0.00) @db.Decimal(10, 2)
+  total_tributos  Json?    // Guarda total de IBS, CBS e FCP para a nova reforma
+
+  data_emissao    DateTime @default(now()) @db.Timestamp(0)
+  atualizado_em   DateTime @updatedAt
+
+  // RELACIONAMENTOS
+  tenants         tenants        @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  pedidos         pedidos?       @relation(fields: [id_pedido], references: [id_pedido], onDelete: SetNull)
+  fornecedores    fornecedores?  @relation(fields: [id_fornecedor], references: [id_fornecedor], onDelete: SetNull)
+  itens           nota_fiscal_itens[]
+
+  @@index([id_tenant], map: "idx_nf_tenant")
+  @@index([id_pedido], map: "idx_nf_pedido")
+  @@index([chave_acesso], map: "idx_nf_chave")
+  @@index([id_fornecedor], map: "idx_nf_fornecedor")
+}
+
+model nota_fiscal_itens {
+  id_item         Int      @id @default(autoincrement())
+  id_nota         Int
+  id_produto      Int?     // Opcional, caso o produto ainda não exista no sistema ao importar o XML
+  nome_produto    String   @db.VarChar(255)
+  quantidade      Decimal  @db.Decimal(10, 3)
+  valor_unitario  Decimal  @db.Decimal(10, 2)
+  valor_total     Decimal  @db.Decimal(10, 2)
+  
+  // 🟢 DADOS FISCAIS ESTÁTICOS NO MOMENTO DA EMISSÃO
+  cfop            String?  @db.VarChar(10)
+  ncm             String?  @db.VarChar(20)
+  cest            String?  @db.VarChar(10)
+  cst_icms        String?  @db.VarChar(4)
+  cst_pis_cofins  String?  @db.VarChar(4)
+
+  // 🟢 IMPOSTOS CALCULADOS DO ITEM E REFORMA TRIBUTÁRIA
+  base_icms       Decimal? @default(0.00) @db.Decimal(10, 2)
+  valor_icms      Decimal? @default(0.00) @db.Decimal(10, 2)
+  valor_pis       Decimal? @default(0.00) @db.Decimal(10, 2)
+  valor_cofins    Decimal? @default(0.00) @db.Decimal(10, 2)
+  valor_ipi       Decimal? @default(0.00) @db.Decimal(10, 2)
+  valor_iss       Decimal? @default(0.00) @db.Decimal(10, 2)
+  impostos_detalhes Json?  // Guarda % de alíquotas aplicadas, IBs, CBS e impostos complexos
+
+  notas_fiscais   notas_fiscais @relation(fields: [id_nota], references: [id_nota], onDelete: Cascade, map: "fk_nfi_nota")
+  produtos        produtos?     @relation(fields: [id_produto], references: [id_produto], onDelete: SetNull, map: "fk_nfi_produto")
+
+  @@index([id_nota], map: "idx_nfi_nota")
+  @@index([id_produto], map: "idx_nfi_produto")
+}
