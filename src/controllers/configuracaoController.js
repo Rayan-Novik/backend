@@ -46,12 +46,35 @@ export const getAppearanceSettings = async (req, res, next) => {
 // ✅ ROTA PÚBLICA: Recupera todas as configurações para o SITE (Frontend)
 export const getStorePublicConfig = async (req, res, next) => {
     try {
-        const slugOrId = req.params.tenantId;
-        let tenantId = parseInt(slugOrId);
+        // Pega o que o frontend enviou (pode ser ID, slug, lojaon.com, www.lojaon.com, etc)
+        const rawParam = req.params.tenantId;
+        let tenantId = parseInt(rawParam);
 
         if (isNaN(tenantId)) {
+            // 1. Limpeza Extrema: Tira http, barras finais e tira o "www." da frente
+            let cleanParam = rawParam
+                .toLowerCase()
+                .trim()
+                .replace(/^https?:\/\//, '')
+                .replace(/\/$/, '')
+                .replace(/^www\./, '');
+
+            // 2. Tenta adivinhar o slug (caso seja um acesso pelo seu domínio padrão)
+            let possibleSlug = cleanParam
+                .replace('.azun.com.br', '')
+                .replace('.ararinhacloud.shop', '');
+
+            // 3. 🟢 BUSCA IMPLACÁVEL NO BANCO DE DADOS
             const lojaInfo = await prisma.tenants.findFirst({
-                where: { slug: slugOrId } 
+                where: { 
+                    OR: [
+                        { slug: possibleSlug }, // Busca pelo nome curto (ex: vendason)
+                        { dominio_customizado: cleanParam }, // Busca pelo domínio exato sem www (ex: lojaon.com)
+                        { dominio_customizado: `www.${cleanParam}` }, // Busca pelo domínio com www (ex: www.lojaon.com)
+                        { dominio_customizado: rawParam } // Busca exatamente o que o usuário digitou, só por garantia
+                    ],
+                    ativo: true
+                } 
             });
 
             if (!lojaInfo) {
@@ -82,11 +105,12 @@ export const getStorePublicConfig = async (req, res, next) => {
             ConfiguracaoModel.get('STORE_LAYOUT_STYLE', tenantId),
             ConfiguracaoModel.get('pix_desconto_ativo', tenantId),
             ConfiguracaoModel.get('pix_desconto_porcentagem', tenantId),
-            ConfiguracaoModel.get('RETIRADA_ATIVA', tenantId), // 🟢 Adicionado para o Frontend
-            ConfiguracaoModel.get('CONSUMO_LOCAL_ATIVO', tenantId) // 🟢 Adicionado para o Frontend
+            ConfiguracaoModel.get('RETIRADA_ATIVA', tenantId), 
+            ConfiguracaoModel.get('CONSUMO_LOCAL_ATIVO', tenantId) 
         ]);
 
-        // 🟢 A MÁGICA AQUI: Pega o status do WhatsApp do lojista
+        // ... (resto do seu código do WhatsApp continua igual)
+
         let isWhatsappActive = false;
         try {
             const whatsStatus = getWhatsAppStatus(String(tenantId));
@@ -113,8 +137,8 @@ export const getStorePublicConfig = async (req, res, next) => {
             PIX_DESCONTO_ATIVO: pixAtivo === 'true', 
             PIX_DESCONTO_PORCENTAGEM: Number(pixPorcentagem || 0),
             WHATSAPP_ATIVO: isWhatsappActive,
-            RETIRADA_ATIVA: retiradaAtiva === 'true', // 🟢 Expondo para o React
-            CONSUMO_LOCAL_ATIVO: consumoLocalAtivo === 'true' // 🟢 Expondo para o React
+            RETIRADA_ATIVA: retiradaAtiva === 'true', 
+            CONSUMO_LOCAL_ATIVO: consumoLocalAtivo === 'true' 
         });
     } catch (error) {
         next(error);

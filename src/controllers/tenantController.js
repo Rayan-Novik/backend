@@ -582,3 +582,48 @@ export const resolveTenantByDomain = async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao resolver o domínio da loja.' });
     }
 };
+
+export const verifyTenant = async (req, res) => {
+    try {
+        let { domain } = req.params;
+
+        // Limpa o domínio recebido (tira www, http, etc)
+        domain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '');
+
+        // Descobre qual é o slug (ex: tira o .ararinhacloud.shop)
+        const baseDomain = process.env.BASE_DOMAIN || 'ararinhacloud.shop';
+        let slug = domain;
+        if (domain.includes(baseDomain)) {
+            slug = domain.replace(`.${baseDomain}`, '');
+        }
+
+        // Busca a loja no banco de dados
+        const tenant = await prisma.tenants.findFirst({
+            where: {
+                OR: [
+                    { dominio_customizado: domain }, // Se for dominio próprio (ex: vendason.com)
+                    { slug: slug }                   // Se for subdomínio (ex: vendason)
+                ],
+                ativo: true
+            },
+            select: {
+                id: true,
+                slug: true,
+                nome_fantasia: true,
+                dominio_customizado: true,
+                imagem: true,
+                plano: true
+            }
+        });
+
+        if (!tenant) {
+            return res.status(404).json({ message: 'Loja não encontrada ou inativa.' });
+        }
+
+        res.status(200).json(tenant);
+
+    } catch (error) {
+        console.error("Erro ao verificar tenant:", error);
+        res.status(500).json({ message: 'Erro interno ao resolver o domínio da loja.' });
+    }
+};

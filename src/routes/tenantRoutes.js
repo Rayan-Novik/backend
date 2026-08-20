@@ -14,6 +14,7 @@ import {
     getTenantContactInfo,
     updateTenantInfo,
     renovarAssinaturaManual,
+    verifyTenant,
 } from '../controllers/tenantController.js';
 import { protect } from '../middlewares/authMiddleware.js';
 import { admin } from '../middlewares/adminMiddleware.js';
@@ -31,6 +32,7 @@ router.put('/info', protect, requirePermission('CONFIG_UNIDADES'), updateTenantI
 router.get('/dominio', protect, admin, getDominioLoja);
 router.put('/dominio', protect, admin, updateDominioLoja);
 router.get('/resolve/:domain', resolveTenantByDomain);
+router.get('/verify/:domain', verifyTenant);
 
 router.get('/saas', protect, admin, getAllTenants);
 router.delete('/saas/:id', protect, admin, deleteTenant);
