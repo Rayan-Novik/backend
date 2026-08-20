@@ -542,3 +542,43 @@ export const renovarAssinaturaManual = async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao tentar renovar a assinatura.' });
     }
 };
+
+export const resolveTenantByDomain = async (req, res) => {
+    try {
+        // Recebe o domínio que veio na requisição
+        let { domain } = req.params;
+        
+        // Limpa o domínio por segurança
+        domain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+        // Procura no banco: ou pelo domínio customizado, ou pelo slug padrão
+        const tenant = await prisma.tenants.findFirst({
+            where: {
+                OR: [
+                    { dominio_customizado: domain },
+                    // Permite também acessar por lojadocliente.seudominio.com.br
+                    { slug: domain.split('.')[0] } 
+                ],
+                ativo: true
+            },
+            select: {
+                id: true,
+                slug: true,
+                nome_fantasia: true,
+                dominio_customizado: true,
+                // Aqui você pode retornar coisas públicas que o frontend precisa de cara, 
+                // como as cores da loja, logo, gateway ativo, etc.
+            }
+        });
+
+        if (!tenant) {
+            return res.status(404).json({ message: 'Loja não encontrada para este domínio.' });
+        }
+
+        res.status(200).json(tenant);
+
+    } catch (error) {
+        console.error("Erro ao resolver domínio:", error);
+        res.status(500).json({ message: 'Erro interno ao resolver o domínio da loja.' });
+    }
+};

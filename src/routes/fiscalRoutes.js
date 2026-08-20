@@ -15,12 +15,14 @@ import {
 
 import { 
     listarNotasSaida, 
-    gerarNotaRascunho 
+    gerarNotaRascunho,
+    emitirNota // 🟢 NOVA FUNÇÃO IMPORTADA
 } from '../controllers/fiscal/production/notaSaidaController.js';
 
 import { 
     listarNotasEntrada, 
-    importarXmlEntrada 
+    importarXmlEntrada,
+    confirmarEntrada // 🟢 IMPORTADO PARA FINALIZAR A ENTRADA DE NOTA
 } from '../controllers/fiscal/production/notaEntradaController.js';
 
 import { 
@@ -39,6 +41,7 @@ const router = express.Router();
 router.get('/configuracao', protect, getConfiguracaoFiscal);
 router.post('/configuracao', protect, upload.single('certificado'), upsertConfiguracaoFiscal);
 router.post('/configuracao/ler-certificado', protect, upload.single('certificado'), lerDadosCertificado);
+router.get('/testar-sefaz', protect, testarConexaoSefaz); // Teste de Conexão com SEFAZ
 
 
 // ==========================================
@@ -46,6 +49,11 @@ router.post('/configuracao/ler-certificado', protect, upload.single('certificado
 // ==========================================
 router.get('/saida', protect, listarNotasSaida);
 router.post('/saida/rascunho', protect, gerarNotaRascunho);
+router.post('/saida/:id/emitir', protect, emitirNota); // 🟢 Rota Oficial Nova
+
+// 🟢 Rotas de compatibilidade (Para não quebrar os botões antigos do seu Frontend)
+router.post('/notas/rascunho', protect, gerarNotaRascunho);
+router.post('/notas/:id/emitir', protect, emitirNota); 
 
 
 // ==========================================
@@ -54,6 +62,8 @@ router.post('/saida/rascunho', protect, gerarNotaRascunho);
 router.get('/entrada', protect, listarNotasEntrada);
 // Usa o multer para ler o arquivo XML do upload via multipart/form-data
 router.post('/entrada/importar', protect, upload.single('xml'), importarXmlEntrada);
+// Rota que salva a nota no banco e alimenta o estoque de verdade
+router.post('/entrada/confirmar', protect, confirmarEntrada); // 🟢 ROTA ADICIONADA
 
 
 // ==========================================
@@ -64,7 +74,5 @@ router.post('/simular/saida/:id', protect, simularEmissaoSaida);
 
 // Cria uma nota de entrada fake e injeta no estoque (Ótimo para testar o sistema)
 router.post('/simular/entrada', protect, simularEmissaoEntrada);
-
-router.get('/testar-sefaz', protect, testarConexaoSefaz);
 
 export default router;

@@ -2,6 +2,7 @@ import express from 'express';
 import { 
     registerTenant, 
     getDominioLoja, 
+    resolveTenantByDomain,
     updateDominioLoja,
     getAllTenants, 
     deleteTenant,
@@ -29,6 +30,7 @@ router.put('/info', protect, requirePermission('CONFIG_UNIDADES'), updateTenantI
 // Rotas protegidas para gerenciar o domínio personalizado
 router.get('/dominio', protect, admin, getDominioLoja);
 router.put('/dominio', protect, admin, updateDominioLoja);
+router.get('/resolve/:domain', resolveTenantByDomain);
 
 router.get('/saas', protect, admin, getAllTenants);
 router.delete('/saas/:id', protect, admin, deleteTenant);
