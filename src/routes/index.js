@@ -48,9 +48,11 @@ import ifoodRoutes from './ifoodRoutes.js';
 import publicApiRoutes from './apiKeysRoutes.js';
 import publicIntegrationRoutes from './publicIntegrationRoutes.js';
 import agendamentoRoutes from './agendamentoRoutes.js';
+import modulosRoutes from './modulosRoutes.js';
 
 // 🟢 NOVOS IMPORTS: Comandas e Mesas
 import comandaRoutes from './comandaRoutes.js';
+import autoatendimentoRoutes from './autoatendimentoRoutes.js';
 import mesasRoutes from './mesasRoutes.js';
 
 // 🟢 NOVO IMPORT: Impressoras
@@ -103,11 +105,13 @@ router.use('/fornecedores', fornecedorRoutes);
 router.use('/automation', automationRoutes);
 router.use('/admin', financialRoutes);
 router.use('/admin/financial', financialRoutes);
+router.use('/admin/modulos', modulosRoutes);
 router.use('/pdv', pdvRoutes);
 
 // 🟢 NOVAS ROTAS REGISTRADAS AQUI:
 router.use('/comandas', comandaRoutes);
 router.use('/mesas', mesasRoutes);
+router.use('/autoatendimento', autoatendimentoRoutes);
 router.use('/impressoras', impressoraRoutes);
 router.use('/fiscal', fiscalRoutes);
 

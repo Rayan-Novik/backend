@@ -26,7 +26,7 @@ export const listarComandas = async (req, res, next) => {
     }
 };
 
-// 🟢 2. ABRIR NOVA COMANDA
+// 🟢 2. ABRIR NOVA COMANDA (Alterada para fixar o ID da Mesa e Criar Usuário)
 export const abrirComanda = async (req, res, next) => {
     try {
         const { codigo_comanda, nome_cliente } = req.body;
@@ -40,16 +40,15 @@ export const abrirComanda = async (req, res, next) => {
             return res.status(400).json({ message: `A comanda ${codigo_comanda} já está ativa.` });
         }
 
-        // 🟢 RESOLUÇÃO DINÂMICA DE NOME (Tenants vs Funcionarios)
+        const mesa = await prisma.mesas.findFirst({ where: { nome: codigo_comanda, id_tenant } });
+
         let nomeDoAtendente = 'Atendente';
         const idBruto = req.user.id_usuario || req.user.id;
 
         if (idBruto === 'DONO' || req.user.role === 'PROPRIETÁRIO') {
-            // Se for o dono, busca o nome fantasia na tabela tenants
             const dono = await prisma.tenants.findUnique({ where: { id: id_tenant } });
             nomeDoAtendente = dono ? dono.nome_fantasia : 'Proprietário';
         } else {
-            // Se for funcionário, busca o nome completo na tabela funcionarios
             const idUsuarioReal = await obterIdUsuarioReal(req.user, id_tenant);
             const funcionario = await prisma.funcionarios.findUnique({ where: { id_funcionario: idUsuarioReal } });
             nomeDoAtendente = funcionario ? funcionario.nome_completo : 'Atendente';
@@ -58,10 +57,23 @@ export const abrirComanda = async (req, res, next) => {
         const emailPadrao = `consumidor_${id_tenant}@pdv.padrao`;
         let consumidorPadrao = await prisma.usuarios.findFirst({ where: { email: emailPadrao, id_tenant } });
 
+        // 🟢 SEGURANÇA: Cria o consumidor padrão caso o banco tenha sido resetado
+        if (!consumidorPadrao) {
+            consumidorPadrao = await prisma.usuarios.create({
+                data: {
+                    nome_completo: 'Consumidor Local',
+                    email: emailPadrao,
+                    hash_senha: 'pdv_safe_pass',
+                    id_tenant
+                }
+            });
+        }
+
         const novaComanda = await prisma.pedidos.create({
             data: {
                 id_tenant,
                 id_usuario: consumidorPadrao.id_usuario,
+                id_mesa: mesa ? mesa.id_mesa : null,
                 codigo_comanda,
                 nome_cliente_comanda: nome_cliente || '',
                 canal_venda: 'COMANDA', 
@@ -73,9 +85,16 @@ export const abrirComanda = async (req, res, next) => {
                 preco_itens: 0,
                 preco_frete: 0,
                 metodo_pagamento: 'A DEFINIR',
-                nome_atendente: nomeDoAtendente // Salva o nome resolvido
+                nome_atendente: nomeDoAtendente
             }
         });
+        
+        if (mesa) {
+            await prisma.mesas.update({
+                where: { id_mesa: mesa.id_mesa },
+                data: { status: 'OCUPADA' }
+            });
+        }
 
         res.status(201).json({ message: "Comanda aberta com sucesso!", comanda: novaComanda });
     } catch (error) {
@@ -83,24 +102,21 @@ export const abrirComanda = async (req, res, next) => {
     }
 };
 
-// 🟢 3. ADICIONAR ITEM NA COMANDA (Reserva Estoque)
+// 🟢 3. ADICIONAR ITEM NA COMANDA (ATUALIZADO COM JSON PARA COMPLEMENTOS)
 export const adicionarItem = async (req, res, next) => {
     try {
         const { id_pedido } = req.params;
-        const { id_produto, id_variacao, quantidade } = req.body;
+        const { id_produto, id_variacao, quantidade, complementos, observacao } = req.body;
         const id_tenant = req.tenantId;
         
-        // 🟢 RESOLUÇÃO DINÂMICA DE NOME (Tenants vs Funcionarios)
         let nomeDoAtendente = 'Atendente';
         const idBruto = req.user.id_usuario || req.user.id;
         const idUsuarioLogadoReal = await obterIdUsuarioReal(req.user, id_tenant);
 
         if (idBruto === 'DONO' || req.user.role === 'PROPRIETÁRIO') {
-            // Se for o dono, busca na tabela tenants
             const dono = await prisma.tenants.findUnique({ where: { id: id_tenant } });
             nomeDoAtendente = dono ? dono.nome_fantasia : 'Proprietário';
         } else {
-            // Se for funcionário, busca na tabela funcionarios
             const funcionario = await prisma.funcionarios.findUnique({ where: { id_funcionario: idUsuarioLogadoReal } });
             nomeDoAtendente = funcionario ? funcionario.nome_completo : 'Atendente';
         }
@@ -113,34 +129,90 @@ export const adicionarItem = async (req, res, next) => {
 
         if (!comanda) return res.status(404).json({ message: "Comanda não encontrada ou finalizada." });
 
-        const produto = await prisma.produtos.findUnique({
-            where: { id_produto: Number(id_produto) }
-        });
-
+        const produto = await prisma.produtos.findUnique({ where: { id_produto: Number(id_produto) } });
         if (!produto) return res.status(404).json({ message: "Produto não encontrado." });
 
-        const subtotal = Number(produto.preco) * quantidadeNum;
-
         await prisma.$transaction(async (tx) => {
+            let precoBasePrincipal = Number(produto.preco);
+            let nomeFinalPrincipal = produto.nome;
+
+            // Tratamento de Variação (Tamanho/Cor)
+            if (id_variacao) {
+                const variacao = await tx.produto_variacoes.findUnique({ where: { id_variacao: Number(id_variacao) } });
+                if (variacao) {
+                    precoBasePrincipal += Number(variacao.preco_adicional);
+                    nomeFinalPrincipal += ` (${variacao.tamanho || variacao.cor || 'Var'})`;
+                }
+            }
+
+            const subtotalPrincipal = precoBasePrincipal * quantidadeNum;
+            let subtotalGeral = subtotalPrincipal;
+
+            // 🟢 1. PREPARA OS COMPLEMENTOS E DÁ BAIXA NO ESTOQUE ANTES DE CRIAR O ITEM PRINCIPAL
+            const complementosArray = complementos || [];
+            let complementosParaSalvar = [];
+
+            for (const comp of complementosArray) {
+                const prodAdic = await tx.produtos.findUnique({ where: { id_produto: Number(comp.id_produto_add) } });
+                if (!prodAdic) continue;
+
+                const qtdAdic = Number(comp.quantidade) || 1;
+                const qtdTotalAdic = qtdAdic * quantidadeNum;
+                const precoAdic = Number(comp.preco_adicional) || 0;
+                
+                const subtotalAdic = (precoAdic * qtdAdic) * quantidadeNum;
+                subtotalGeral += subtotalAdic;
+
+                // Guarda os dados no array que será jogado no campo JSON
+                complementosParaSalvar.push({
+                    id_produto_add: prodAdic.id_produto,
+                    nome: prodAdic.nome,
+                    quantidade: qtdAdic,
+                    preco_adicional: precoAdic
+                });
+
+                // Baixa no estoque do adicional independentemente
+                await tx.produtos.update({
+                    where: { id_produto: prodAdic.id_produto },
+                    data: { estoque: { decrement: qtdTotalAdic } }
+                });
+
+                await tx.movimentacaoEstoque.create({
+                    data: {
+                        id_produto: prodAdic.id_produto, 
+                        quantidade: qtdTotalAdic, 
+                        tipo: 'SAIDA',
+                        saldo_momento: Number(prodAdic.estoque) - qtdTotalAdic,
+                        motivo: `Adicional lançado por ${nomeDoAtendente} (Comanda #${comanda.codigo_comanda})`,
+                        origem_destino: 'COMANDA', 
+                        usuario_id: idUsuarioLogadoReal
+                    }
+                });
+            }
+
+            // 🟢 2. CRIA APENAS 1 LINHA NO BANCO COM O ITEM PRINCIPAL + JSON DOS COMPLEMENTOS
             await tx.pedido_items.create({
                 data: {
-                    id_pedido: comanda.id_pedido,
-                    id_produto: produto.id_produto,
+                    id_pedido: comanda.id_pedido, 
+                    id_produto: produto.id_produto, 
                     id_variacao: id_variacao || null,
-                    nome: produto.nome,
-                    quantidade: quantidadeNum,
-                    preco: produto.preco,
-                    imagem_url: produto.imagem_url,
-                    id_tenant,
-                    nome_atendente: nomeDoAtendente // Salva quem lançou o produto
+                    nome: nomeFinalPrincipal, 
+                    quantidade: quantidadeNum, 
+                    preco: precoBasePrincipal,
+                    imagem_url: produto.imagem_url, 
+                    id_tenant, 
+                    nome_atendente: nomeDoAtendente,
+                    observacao: observacao || null,
+                    complementos: complementosParaSalvar.length > 0 ? complementosParaSalvar : null
                 }
             });
 
+            // 3. Atualiza os Totais da Comanda e Baixa Estoque do Principal
             await tx.pedidos.update({
                 where: { id_pedido: comanda.id_pedido },
                 data: {
-                    preco_total: { increment: subtotal },
-                    preco_itens: { increment: subtotal },
+                    preco_total: { increment: subtotalGeral },
+                    preco_itens: { increment: subtotalGeral },
                     status_comanda: 'ABERTA'
                 }
             });
@@ -152,21 +224,19 @@ export const adicionarItem = async (req, res, next) => {
 
             await tx.movimentacaoEstoque.create({
                 data: {
-                    id_produto: produto.id_produto,
-                    quantidade: quantidadeNum,
+                    id_produto: produto.id_produto, 
+                    quantidade: quantidadeNum, 
                     tipo: 'SAIDA',
                     saldo_momento: Number(produto.estoque) - quantidadeNum,
-                    motivo: `Adicionado na Comanda #${comanda.codigo_comanda} por ${nomeDoAtendente}`,
-                    origem_destino: 'COMANDA',
+                    motivo: `Lançado por ${nomeDoAtendente} na Comanda #${comanda.codigo_comanda}`,
+                    origem_destino: 'COMANDA', 
                     usuario_id: idUsuarioLogadoReal
                 }
             });
         });
 
-        res.status(200).json({ message: "Item adicionado com sucesso!" });
-    } catch (error) {
-        next(error);
-    }
+        res.status(200).json({ message: "Item e adicionais lançados com sucesso!" });
+    } catch (error) { next(error); }
 };
 
 // 🟢 4. REMOVER ITEM DA COMANDA (Estorna Estoque)
@@ -182,7 +252,21 @@ export const removerItem = async (req, res, next) => {
 
         if (!item) return res.status(404).json({ message: "Item não encontrado nesta comanda." });
 
-        const subtotal = Number(item.preco) * Number(item.quantidade);
+        // Aqui, calcula o estorno também considerando se houver adicionais atrelados
+        // Se item.complementos for um array JSON, precisaremos somar os valores deles caso não venha no "item.preco" direto
+        // Supondo que item.preco já reflete o valor correto ou o front resolva, mantemos a lógica ou calculamos com os complementos:
+        
+        let subtotalComplementos = 0;
+        let complementosArray = [];
+        
+        if (item.complementos && typeof item.complementos === 'object') {
+            complementosArray = Array.isArray(item.complementos) ? item.complementos : Object.values(item.complementos);
+            complementosArray.forEach(comp => {
+                subtotalComplementos += (Number(comp.preco_adicional) * Number(comp.quantidade)) * Number(item.quantidade);
+            });
+        }
+
+        const subtotal = (Number(item.preco) * Number(item.quantidade)) + subtotalComplementos;
 
         await prisma.$transaction(async (tx) => {
             await tx.pedido_items.delete({
@@ -217,6 +301,33 @@ export const removerItem = async (req, res, next) => {
                     }
                 });
             }
+
+            // Estorno do estoque dos complementos vinculados
+            if (complementosArray.length > 0) {
+                for (const comp of complementosArray) {
+                    const qtdTotalEstornar = Number(comp.quantidade) * Number(item.quantidade);
+                    const prodAdic = await tx.produtos.findUnique({ where: { id_produto: Number(comp.id_produto_add) } });
+                    
+                    if (prodAdic) {
+                        await tx.produtos.update({
+                            where: { id_produto: prodAdic.id_produto },
+                            data: { estoque: { increment: qtdTotalEstornar } }
+                        });
+                        
+                        await tx.movimentacaoEstoque.create({
+                            data: {
+                                id_produto: prodAdic.id_produto,
+                                quantidade: qtdTotalEstornar,
+                                tipo: 'ENTRADA',
+                                saldo_momento: Number(prodAdic.estoque) + qtdTotalEstornar,
+                                motivo: `Adicional removido da Comanda (Estorno)`,
+                                origem_destino: 'COMANDA',
+                                usuario_id: id_usuario_logado
+                            }
+                        });
+                    }
+                }
+            }
         });
 
         res.status(200).json({ message: "Item removido e estoque estornado." });
@@ -247,7 +358,7 @@ export const fecharPagamentoComanda = async (req, res, next) => {
         }
 
         await prisma.$transaction(async (tx) => {
-            // 1. Atualiza o Pedido (Injetando no Caixa PDV correto)
+            // 1. Atualiza o Pedido
             await tx.pedidos.update({
                 where: { id_pedido: comanda.id_pedido },
                 data: {
@@ -259,7 +370,7 @@ export const fecharPagamentoComanda = async (req, res, next) => {
                 }
             });
 
-            // 2. Incrementa visualizações para o Dashboard!
+            // 2. Incrementa visualizações dos produtos
             const itensVendidos = await tx.pedido_items.findMany({ where: { id_pedido: comanda.id_pedido } });
             for (const item of itensVendidos) {
                 if (item.id_produto) {
@@ -270,26 +381,32 @@ export const fecharPagamentoComanda = async (req, res, next) => {
                 }
             }
 
-            // ❌ O CLONE DA TRANSAÇÃO FOI DELETADO DAQUI (Passo 3 apagado)
-
-            // 4. Atualiza o saldo do sistema no caixa na hora
+            // 3. Atualiza o saldo do caixa
             await tx.caixa_pdv.updateMany({
                 where: { id_caixa: caixaAtivo.id_caixa, id_tenant },
                 data: { saldo_sistema: { increment: comanda.preco_total } }
             });
 
-            // 5. Libera a mesa física
+            // 4. 🟢 MÁGICA: Extrai todos os números separados (Ex: "03 + 02" vira ["03", "02"])
+            const nomesMesas = comanda.codigo_comanda.split('+').map(n => n.replace(/[()]/g, '').trim());
+
+            // Libera TODAS as mesas que fizeram parte dessa comanda de uma vez só!
             await tx.mesas.updateMany({
-                where: { nome: comanda.codigo_comanda, id_tenant },
+                where: {
+                    id_tenant,
+                    OR: [
+                        { nome: { in: nomesMesas } },
+                        { mesa_agrupada: { in: nomesMesas } },
+                        { id_mesa: comanda.id_mesa || -1 }
+                    ]
+                },
                 data: { status: 'LIVRE', mesa_agrupada: null }
             });
         });
 
-        // 6. Integra com o Fechamento Global do Sistema
+        // 5. Integração com o Financeiro
         try {
             await gerarRecebivelDePedido(comanda, id_tenant);
-            
-            // 🟢 Aqui é o ÚNICO lugar onde o financeiro é chamado!
             await registrarEntradaFinanceira({
                 id_pedido: comanda.id_pedido,
                 id_usuario: comanda.id_usuario,
@@ -299,9 +416,9 @@ export const fecharPagamentoComanda = async (req, res, next) => {
                 valor_taxa_real: 0,
                 id_tenant
             });
-        } catch (finErr) {
-            console.log("Aviso Financeiro Global:", finErr.message);
-        }
+        } catch (finErr) {}
+
+        if (req.app.get('io')) req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
 
         res.status(200).json({ message: "Comanda encerrada com sucesso e lançada no fluxo de caixa!" });
     } catch (error) {
@@ -312,7 +429,7 @@ export const fecharPagamentoComanda = async (req, res, next) => {
 // 🟢 6. JUNTAR COMANDAS (MERGE) - Atualizado e Seguro!
 export const juntarComandas = async (req, res, next) => {
     try {
-        const { id_mesa_origem, id_comanda_destino } = req.body;
+        const { id_mesa_origem, id_comanda_destino, tipo_juncao } = req.body;
         const id_tenant = req.tenantId;
 
         if (!id_mesa_origem || !id_comanda_destino) {
@@ -323,57 +440,102 @@ export const juntarComandas = async (req, res, next) => {
             where: { id_pedido: Number(id_comanda_destino), id_tenant, status_comanda: 'ABERTA' }
         });
 
-        if (!destino) return res.status(404).json({ message: "A mesa de destino precisa estar aberta." });
+        if (!destino) return res.status(404).json({ message: "A mesa destino não está aberta." });
 
         const mesaOrigem = await prisma.mesas.findFirst({
             where: { id_mesa: Number(id_mesa_origem), id_tenant }
         });
 
         if (!mesaOrigem) return res.status(404).json({ message: "Mesa de origem não encontrada." });
-        if (mesaOrigem.nome === destino.codigo_comanda) return res.status(400).json({ message: "Não pode juntar a mesa com ela mesma." });
 
-        // Tenta achar a comanda da mesa que o garçom arrastou (pode não existir se estiver livre)
+        // 🟢 ACHA A MESA DESTINO FÍSICA PARA AMARRAR CORRETAMENTE NO AUTOATENDIMENTO
+        let nomeMesaDestinoFisica = destino.codigo_comanda; // Fallback
+        if (destino.id_mesa) {
+            const md = await prisma.mesas.findFirst({ where: { id_mesa: destino.id_mesa } });
+            if (md) nomeMesaDestinoFisica = md.nome;
+        } else {
+            // Se a destino for fantasma, o codigo_comanda é o próprio nome original
+            nomeMesaDestinoFisica = destino.codigo_comanda.split(' + ')[0]; 
+        }
+
+        if (mesaOrigem.nome === nomeMesaDestinoFisica) return res.status(400).json({ message: "Não pode juntar a mesa com ela mesma." });
+
+        // 🟢 MÁGICA: Buscar a comanda da mesa de origem de forma "blindada" (Fantasmas incluídas)
         const origemComanda = await prisma.pedidos.findFirst({
-            where: { codigo_comanda: mesaOrigem.nome, id_tenant, status_comanda: 'ABERTA' },
+            where: { 
+                OR: [
+                    { id_mesa: mesaOrigem.id_mesa },
+                    { codigo_comanda: mesaOrigem.nome }
+                ],
+                id_tenant, 
+                status_comanda: { in: ['ABERTA', 'FECHANDO'] } 
+            },
             include: { pedido_items: true }
         });
 
         await prisma.$transaction(async (tx) => {
-            // Se a mesa arrastada tinha uma comanda ativa, nós transferimos tudo para o destino
-            if (origemComanda) {
-                if (origemComanda.pedido_items.length > 0) {
-                    await tx.pedido_items.updateMany({
-                        where: { id_pedido: origemComanda.id_pedido },
-                        data: { id_pedido: destino.id_pedido }
-                    });
+            if (tipo_juncao === 'UNIR_CONTAS') {
+                // 🟢 OPÇÃO 1: Juntar TUDO em 1 comanda só
+                const novoNomeDestino = `${destino.codigo_comanda} + ${mesaOrigem.nome}`;
 
+                if (origemComanda) {
+                    // Se tinha itens na mesa 1, joga todos para a mesa 2
+                    if (origemComanda.pedido_items.length > 0) {
+                        await tx.pedido_items.updateMany({
+                            where: { id_pedido: origemComanda.id_pedido },
+                            data: { id_pedido: destino.id_pedido }
+                        });
+                    }
+
+                    // Atualiza a comanda destino com os valores e novo nome
                     await tx.pedidos.update({
                         where: { id_pedido: destino.id_pedido },
                         data: {
                             preco_total: { increment: origemComanda.preco_total },
-                            preco_itens: { increment: origemComanda.preco_itens }
+                            preco_itens: { increment: origemComanda.preco_itens },
+                            codigo_comanda: novoNomeDestino
                         }
+                    });
+
+                    // Invalida a comanda antiga para não contar duas vezes
+                    await tx.pedidos.update({
+                        where: { id_pedido: origemComanda.id_pedido },
+                        data: { status_comanda: 'MESCLADA', preco_total: 0, preco_itens: 0 }
+                    });
+                } else {
+                    // Se não tinha pedido, só atualiza o nome
+                    await tx.pedidos.update({
+                        where: { id_pedido: destino.id_pedido },
+                        data: { codigo_comanda: novoNomeDestino }
                     });
                 }
 
-                // Mata a comanda antiga para não dar conflito financeiro
+                // Bloqueia a mesa origem e amarra à MESA FÍSICA de destino
+                await tx.mesas.update({
+                    where: { id_mesa: mesaOrigem.id_mesa },
+                    data: { status: 'AGRUPADA', mesa_agrupada: nomeMesaDestinoFisica }
+                });
+
+            } else {
+                // 🟢 OPÇÃO 2: Contas Separadas (Apenas visual)
+                if (origemComanda) {
+                    await tx.pedidos.update({
+                        where: { id_pedido: origemComanda.id_pedido },
+                        data: { codigo_comanda: `${mesaOrigem.nome} (+${nomeMesaDestinoFisica})` }
+                    });
+                }
                 await tx.pedidos.update({
-                    where: { id_pedido: origemComanda.id_pedido },
-                    data: { status_comanda: 'MESCLADA', preco_total: 0, preco_itens: 0 }
+                    where: { id_pedido: destino.id_pedido },
+                    data: { codigo_comanda: `${destino.codigo_comanda} (+${mesaOrigem.nome})` }
                 });
             }
-
-            // O passo principal: Travar a mesa no mundo físico
-            await tx.mesas.update({
-                where: { id_mesa: mesaOrigem.id_mesa },
-                data: { 
-                    status: 'AGRUPADA', 
-                    mesa_agrupada: destino.codigo_comanda 
-                }
-            });
         });
 
-        res.status(200).json({ message: "Mesas unidas com sucesso!" });
+        if (req.app.get('io')) {
+            req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
+        }
+
+        res.status(200).json({ message: "Mesas organizadas com sucesso!" });
     } catch (error) {
         next(error);
     }
@@ -465,29 +627,36 @@ export const cancelarComanda = async (req, res, next) => {
         const id_tenant = req.tenantId;
 
         const comanda = await prisma.pedidos.findFirst({
-            where: { id_pedido: Number(id_pedido), id_tenant, status_comanda: 'ABERTA' },
+            where: { id_pedido: Number(id_pedido), id_tenant, status_comanda: { in: ['ABERTA', 'FECHANDO', 'MESCLADA'] } },
             include: { pedido_items: true }
         });
 
         if (!comanda) return res.status(404).json({ message: "Comanda não encontrada." });
         
-        // Trava de segurança: Se tiver itens, não deixa apagar.
         if (comanda.pedido_items && comanda.pedido_items.length > 0) {
             return res.status(400).json({ message: "Não é possível cancelar uma comanda que possui itens." });
         }
 
         await prisma.$transaction(async (tx) => {
-            // Deleta o pedido fantasma
-            await tx.pedidos.delete({
-                where: { id_pedido: comanda.id_pedido }
-            });
+            await tx.pedidos.delete({ where: { id_pedido: comanda.id_pedido } });
             
-            // Libera a mesa física associada a esse nome
+            // 🟢 MÁGICA DE DESBLOQUEIO TAMBÉM NO CANCELAMENTO
+            const nomesMesas = comanda.codigo_comanda.split('+').map(n => n.replace(/[()]/g, '').trim());
+
             await tx.mesas.updateMany({
-                where: { nome: comanda.codigo_comanda, id_tenant },
+                where: {
+                    id_tenant,
+                    OR: [
+                        { nome: { in: nomesMesas } },
+                        { mesa_agrupada: { in: nomesMesas } },
+                        { id_mesa: comanda.id_mesa || -1 }
+                    ]
+                },
                 data: { status: 'LIVRE', mesa_agrupada: null }
             });
         });
+
+        if (req.app.get('io')) req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
 
         res.status(200).json({ message: "Atendimento cancelado e mesa liberada." });
     } catch (error) {
@@ -559,29 +728,35 @@ export const imprimirCozinha = async (req, res, next) => {
         const { id_pedido } = req.params;
         const id_tenant = req.tenantId;
 
+        // 1. Busca a comanda apenas com os itens (Sem tentar o include do produto)
         const comanda = await prisma.pedidos.findFirst({
             where: { id_pedido: Number(id_pedido), id_tenant, status_comanda: { in: ['ABERTA', 'FECHANDO'] } },
-            include: { 
-                pedido_items: {
-                    include: {
-                        produtos: { include: { categorias: true } }
-                    }
-                } 
-            }
+            include: { pedido_items: true } 
         });
 
         if (!comanda) return res.status(404).json({ message: "Comanda não encontrada." });
         if (comanda.pedido_items.length === 0) return res.status(400).json({ message: "A comanda está vazia." });
 
-        // 🟢 BUSCA TODAS AS IMPRESSORAS DO TENANT
+        // 2. Extrai os IDs dos produtos e busca eles separadamente junto com as categorias
+        const idsProdutos = comanda.pedido_items.map(i => i.id_produto).filter(id => id !== null);
+        const produtosDb = await prisma.produtos.findMany({
+            where: { id_produto: { in: idsProdutos }, id_tenant },
+            include: { categorias: true }
+        });
+
+        // 3. Busca todas as impressoras
         const impressoras = await prisma.impressoras.findMany({ where: { id_tenant, ativo: true } });
         const impPadrao = impressoras.find(i => i.is_padrao) || impressoras[0];
 
-        // 🟢 SEPARA OS ITENS POR IMPRESSORA BASEADO NA CATEGORIA
+        // 4. Agrupa os itens por impressora
         const jobs = {};
 
         comanda.pedido_items.forEach(item => {
-            const idImp = item.produtos?.categorias?.id_impressora;
+            // Acha os dados do produto correspondente
+            const produtoReal = produtosDb.find(p => p.id_produto === item.id_produto);
+            
+            // Descobre o ID da impressora amarrada na categoria do produto
+            const idImp = produtoReal?.categorias?.id_impressora;
             const printer = impressoras.find(i => i.id_impressora === idImp) || impPadrao;
 
             if (!printer) return; // Se não tiver impressora cadastrada, ignora
@@ -594,9 +769,13 @@ export const imprimirCozinha = async (req, res, next) => {
                     itens: []
                 };
             }
+            
             jobs[printer.id_impressora].itens.push({
                 nome: item.nome,
-                quantidade: item.quantidade
+                quantidade: item.quantidade,
+                observacao: item.observacao,
+                // 🟢 Agora a impressora também recebe os complementos (JSON) para a via da cozinha!
+                complementos: item.complementos || [] 
             });
         });
 

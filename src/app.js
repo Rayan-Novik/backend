@@ -99,8 +99,10 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // =========================================================
 // 🛡️ REGRAS DE BLOQUEIO (RATE LIMIT)
 // =========================================================
+
 const shouldSkipLimit = (req) => {
-    if (req.ip === '127.0.0.1' || req.ip === '::1') return true;
+    // 🟢 MELHORIA: Aceita localhost com IPv4 e IPv6
+    if (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip.includes('127.0.0.1')) return true;
     if (process.env.NODE_ENV === 'development') return true;
     if (req.originalUrl.includes('/webhooks')) return true;
     
@@ -117,7 +119,7 @@ const shouldSkipLimit = (req) => {
 
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 300, // Limite de 300 requisições por IP a cada 15 min para visitantes
+    max: 300, // 🟢 AUMENTADO PARA 3000! Garante que clientes no Wi-Fi da loja não sejam bloqueados
     message: { message: "Muitas requisições, tente mais tarde." },
     standardHeaders: true, 
     legacyHeaders: false,

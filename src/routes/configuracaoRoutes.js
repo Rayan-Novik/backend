@@ -17,13 +17,15 @@ import {
 } from '../controllers/configuracaoController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
-// 🟢 Importando a nossa catraca inteligente!
 import { requirePermission } from '../middlewares/permissionMiddleware.js';
 
 // ==========================================================
 // 🔓 ROTAS PÚBLICAS (Para a Vitrine / Checkout)
 // ==========================================================
+
+// 🟢 CORREÇÃO DO ERRO 404: Esta rota aceita a palavra 'default' ou o tenantId/slug para carregar a vitrine!
 router.get('/public/:tenantId', getStorePublicConfig);
+
 router.get('/public', getPublicConfiguracoes);
 router.get('/payment-config', getPaymentConfig);
 router.get('/appearance', getAppearanceSettings); // Get público para carregar as cores

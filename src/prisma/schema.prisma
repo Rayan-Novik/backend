@@ -15,6 +15,8 @@ model carrinhos {
   id_variacao     Int?
   quantidade      Decimal  @db.Decimal(10, 3)
   data_adicionado DateTime @default(now()) @db.Timestamp(0)
+  complementos    Json?
+  observacao      String?  @db.Text
   
   usuarios        usuarios @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade, onUpdate: NoAction, map: "carrinhos_ibfk_1")
   produtos        produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "carrinhos_ibfk_2")
@@ -57,6 +59,8 @@ model pedido_items {
   tenants    tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_pedido_items_tenant")
   pedidos    pedidos  @relation(fields: [id_pedido], references: [id_pedido], onDelete: Cascade, onUpdate: NoAction, map: "pedido_items_fk_pedido")
   nome_atendente  String?  @db.VarChar(255)
+  observacao String?  @db.Text
+  complementos Json?
 
   @@index([id_pedido], map: "id_pedido")
   @@index([id_tenant], map: "fk_pedido_items_tenant")
@@ -140,12 +144,14 @@ model impressoras {
 model mesas {
   id_mesa    Int       @id @default(autoincrement())
   id_tenant  Int
-  nome       String    @db.VarChar(50)
-  status     String    @default("LIVRE") @db.VarChar(20)
+  nome       String    @db.VarChar(50) // Ex: "Mesa 01", "Camarote A"
+  status     String    @default("LIVRE") @db.VarChar(20) // LIVRE, OCUPADA, RESERVADA
+  token        String?   @unique @db.VarChar(100) 
+  url_qrcode   String?   @db.VarChar(2048)
   mesa_agrupada  String?   @db.VarChar(50)
   
   tenants    tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
-  pedidos    pedidos[]
+  pedidos    pedidos[] // Histórico de comandas dessa mesa
 
   @@index([id_tenant], map: "idx_mesas_tenant")
 }
@@ -1023,6 +1029,7 @@ model tenants {
   cargos                 cargos[]
   produto_grupos_complemento produto_grupos_complemento[]
   agendamentos_servicos agendamentos_servicos[]
+  controle_modulos controle_modulos[]
   
   // 🟢 RELAÇÕES DO WHATSAPP
   whatsapp_contatos      WhatsappContatos[]
@@ -1323,6 +1330,8 @@ model produto_complementos {
   id_produto_add Int     // O produto que está sendo listado como opção (ex: Coca-Cola)
   preco_adicional Decimal @default(0.00) @db.Decimal(10, 2)
   ifood_id       String?  @db.VarChar(255) 
+  minimo         Int      @default(0)
+  maximo         Int      @default(1)
 
   grupo          produto_grupos_complemento @relation(fields: [id_grupo], references: [id_grupo], onDelete: Cascade)
   produto_add    produtos @relation(fields: [id_produto_add], references: [id_produto], onDelete: Cascade)
@@ -1483,4 +1492,19 @@ model nota_fiscal_itens {
 
   @@index([id_nota], map: "idx_nfi_nota")
   @@index([id_produto], map: "idx_nfi_produto")
+}
+
+model controle_modulos {
+  id_controle   Int      @id @default(autoincrement())
+  id_tenant     Int
+  modulo        String   @db.VarChar(100) // Ex: 'FISCAL', 'PDV', 'IFOOD', 'CATALOGO'
+  ativo         Boolean  @default(true)
+  mensagem_erro String?  @db.VarChar(255) // Ex: "Módulo Fiscal em manutenção até as 14h"
+  atualizado_em DateTime @updatedAt @default(now())
+
+  tenants       tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  // Garante que não teremos registros duplicados do mesmo módulo para o mesmo tenant
+  @@unique([modulo, id_tenant], map: "uk_modulo_tenant")
+  @@index([id_tenant], map: "idx_controle_modulos_tenant")
 }

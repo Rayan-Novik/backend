@@ -23,9 +23,9 @@ const Produto = {
                     take: 1,
                     orderBy: { ordem: 'asc' }
                 },
-                produto_variacoes: true // 🟢 AQUI: Traz as variações para a vitrine principal
+                produto_variacoes: true 
             },
-            orderBy: { data_criacao: 'desc' } // Se houver erro de coluna aqui, mude para id_produto: 'desc'
+            orderBy: { id_produto: 'desc' } 
         });
     },
 
@@ -45,7 +45,25 @@ const Produto = {
                 produto_subimagens: {
                     orderBy: { ordem: 'asc' },
                 },
-                produto_variacoes: true, // Aqui estão as variações (tamanhos, cores)
+                produto_variacoes: true, // Variações Simples (Tamanho, Cor)
+                
+                // 🟢 A MÁGICA DOS ADICIONAIS (ESTILO IFOOD)
+                // Isso traz os grupos ("Escolha seu Pão", "Adicionais") e os itens dentro deles
+                grupos_complemento: {
+                    orderBy: { ordem: 'asc' },
+                    include: {
+                        complementos: {
+                            include: {
+                                produto_add: {
+                                    // Puxa o nome e foto do adicional (ex: "Bacon", "Pão Caseiro")
+                                    select: { id_produto: true, nome: true, imagem_url: true }
+                                }
+                            }
+                        }
+                    }
+                },
+
+                // 🟢 CONTROLE DE ESTOQUE (Ficha Técnica Interna)
                 composicao_pai: {
                     include: {
                         insumo: {
@@ -64,7 +82,7 @@ const Produto = {
         return prisma.produtos.updateMany({
             where: {
                 id_produto: Number(id),
-                id_tenant: id_tenant // 🛡️ BLINDAGEM SAAS
+                id_tenant: id_tenant 
             },
             data: {
                 visualizacoes: { increment: 1 },
@@ -80,7 +98,7 @@ const Produto = {
         return prisma.produtos.findMany({
             where: {
                 id_produto: { in: ids },
-                id_tenant: id_tenant // 🛡️ BLINDAGEM SAAS
+                id_tenant: id_tenant 
             },
             include: {
                 categorias: { select: { id_categoria: true, nome: true } },
@@ -95,7 +113,7 @@ const Produto = {
     findByCategoryName: async (categoryName, id_tenant, limit = null) => {
         const queryOptions = {
             where: {
-                id_tenant: id_tenant, // 🛡️ BLINDAGEM SAAS
+                id_tenant: id_tenant, 
                 categorias: { nome: categoryName },
                 active_ecommerce: true,
                 tipo_produto: { in: ['FINAL', 'MISTO'] }
@@ -104,7 +122,7 @@ const Produto = {
                 categorias: true,
                 marcas: true,
                 produto_subimagens: { take: 1 },
-                produto_variacoes: true // 🟢 AQUI: Traz as variações para a tela de categoria
+                produto_variacoes: true 
             }
         };
         if (limit) queryOptions.take = limit;
@@ -161,7 +179,7 @@ const Produto = {
     search: async (keyword, id_tenant) => {
         return prisma.produtos.findMany({
             where: {
-                id_tenant: id_tenant, // 🛡️ BLINDAGEM SAAS
+                id_tenant: id_tenant, 
                 AND: [
                     { active_ecommerce: true },
                     {
@@ -209,11 +227,10 @@ const Produto = {
     },
 
     // ============================================================
-    //      ESTOQUE, MANUFATURA E RASTREIO (CRAFTING)
+    //      ESTOQUE, MANUFATURA E RASTREIO (FICHA TÉCNICA)
     // ============================================================
 
     setComposicao: async (id_produto_final, itens, id_tenant) => {
-        // Primeiro verificamos se o produto final pertence à loja
         const produto = await prisma.produtos.findFirst({
             where: { id_produto: Number(id_produto_final), id_tenant: id_tenant }
         });
@@ -234,7 +251,6 @@ const Produto = {
 
     fabricar: async (id_produto_final, qtd_fabricar, usuario_id, id_tenant) => {
         return prisma.$transaction(async (tx) => {
-            // Garante que o produto é da loja
             const produtoFinal = await tx.produtos.findFirst({
                 where: { id_produto: Number(id_produto_final), id_tenant: id_tenant }
             });
@@ -247,9 +263,7 @@ const Produto = {
 
             if (receita.length === 0) throw new Error("Receita não definida para este produto.");
 
-            // 1. Consumo de Insumos
             for (const item of receita) {
-                // Garante que o insumo também é da loja (segurança extra)
                 if (item.insumo.id_tenant !== id_tenant) continue;
 
                 const totalNecessario = Number(item.quantidade_necessaria) * Number(qtd_fabricar);
@@ -276,7 +290,6 @@ const Produto = {
                 });
             }
 
-            // 2. Entrada do Produto Final
             const novoEstoqueFinal = Number(produtoFinal.estoque) + Number(qtd_fabricar);
 
             await tx.movimentacaoEstoque.create({
@@ -328,9 +341,6 @@ const Produto = {
         });
     },
 
-    /**
-     * Cadastro inicial. Espera-se que produtoData já venha com id_tenant do Controller
-     */
     create: async (produtoData) => {
         return prisma.$transaction(async (tx) => {
             const novoProduto = await tx.produtos.create({ data: produtoData });
@@ -362,7 +372,6 @@ const Produto = {
     },
 
     getRastreio: async (id, id_tenant) => {
-        // Garante que a pessoa não está espionando rastro de produto de outro lojista
         const produto = await prisma.produtos.findFirst({
             where: { id_produto: Number(id), id_tenant: id_tenant }
         });

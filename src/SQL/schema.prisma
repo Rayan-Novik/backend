@@ -92,6 +92,7 @@ model mesas {
   nome       String    @db.VarChar(50) // Ex: "Mesa 01", "Camarote A"
   status     String    @default("LIVRE") @db.VarChar(20) // LIVRE, OCUPADA, RESERVADA
   
+  
   tenants    tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
   pedidos    pedidos[] // Histórico de comandas dessa mesa
 

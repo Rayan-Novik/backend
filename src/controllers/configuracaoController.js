@@ -310,4 +310,5 @@ export const saveConfiguracao = async (req, res, next) => {
     }
 };
 
+
 export const updateConfiguracao = saveConfiguracao;

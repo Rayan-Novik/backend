@@ -7,14 +7,13 @@ const toFloat = (val) => parseFloat(val) || 0;
 export default {
     async create(pedidoData, itemsData, id_tenant) {
         const itensParaSalvar = itemsData.map(item => {
-            // 1. Tenta pegar a variação de várias formas (blindagem)
+            // 1. Tenta pegar a variação de várias formas
             const variacao = item.variacao || item.produtos.variacao || null;
 
-            // 2. Formata o nome
+            // 2. Formata o nome base
             let nomeFormatado = item.produtos.nome || item.nome;
 
             if (variacao) {
-                // Verifica se a variação tem cor e tamanho
                 const cor = variacao.cor ? `Cor: ${variacao.cor}` : '';
                 const tam = variacao.tamanho ? `Tam: ${variacao.tamanho}` : '';
                 const traco = (cor && tam) ? ' | ' : '';
@@ -24,13 +23,43 @@ export default {
                 }
             }
 
+            // 3. Calcula o preço base do produto + variação
+            let precoUnitarioCalculado = toFloat(item.produtos.preco || item.preco);
+            if (variacao && variacao.preco_adicional) {
+                precoUnitarioCalculado += toFloat(variacao.preco_adicional);
+            }
+
+            // 4. Trata e soma os complementos ao preço unitário do item
+            let complementosSalvos = [];
+            if (item.complementos) {
+                try {
+                    complementosSalvos = typeof item.complementos === 'string' 
+                        ? JSON.parse(item.complementos) 
+                        : item.complementos;
+
+                    complementosSalvos.forEach(c => {
+                        const precoAdicionalComp = toFloat(c.preco_adicional || c.preco || 0);
+                        const qtdComp = parseInt(c.quantidade || 1, 10);
+                        // Soma o adicional ao preço unitário do item principal
+                        precoUnitarioCalculado += (precoAdicionalComp * qtdComp);
+                    });
+                } catch (e) {
+                    complementosSalvos = [];
+                }
+            }
+
             return {
                 id_produto: Number(item.produtos.id_produto || item.id_produto),
-                nome: nomeFormatado, // 🟢 O campo obrigatório do seu banco
+                nome: nomeFormatado, 
                 quantidade: Number(item.quantidade),
-                preco: toFloat(item.produtos.preco || item.preco),
+                // 🟢 Agora o preço salvo no pedido já inclui o produto + variação + todos os complementos!
+                preco: precoUnitarioCalculado,
                 imagem_url: item.produtos.imagem_url || item.imagem_url || null,
-                id_variacao: item.id_variacao ? Number(item.id_variacao) : null
+                id_variacao: item.id_variacao ? Number(item.id_variacao) : null,
+                
+                // 🟢 Salva o JSON dos complementos no banco do pedido
+                complementos: complementosSalvos,
+                observacao: item.observacao || null
             };
         });
 

@@ -10,8 +10,6 @@ const prisma = new PrismaClient();
 
 export const getAllProdutos = async (req, res, next) => {
     try {
-        console.log(`🚨 BUSCANDO PRODUTOS PARA A LOJA ID: ${req.tenantId}`);
-
         const produtos = await prisma.produtos.findMany({
             where: { id_tenant: req.tenantId },
             orderBy: { id_produto: 'desc' },
@@ -19,7 +17,20 @@ export const getAllProdutos = async (req, res, next) => {
                 categorias: true,
                 subcategorias: true,
                 marcas: true,
-                produto_variacoes: true 
+                produto_variacoes: true,
+                // 🟢 MÁGICA AQUI: Agora a lista principal carrega os adicionais!
+                grupos_complemento: {
+                    orderBy: { ordem: 'asc' },
+                    include: {
+                        complementos: {
+                            include: {
+                                produto_add: {
+                                    select: { id_produto: true, nome: true, imagem_url: true }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
         res.status(200).json(produtos);
@@ -58,11 +69,9 @@ export const getProdutoById = async (req, res, next) => {
         const { id } = req.params;
         let productId;
 
-        // 1. Verifica se o parâmetro já é um ID numérico direto
         if (!isNaN(id)) {
             productId = Number(id);
         } else {
-            // 2. Se for texto, tenta buscar diretamente pelo campo slug no banco
             const produtoPorSlug = await prisma.produtos.findFirst({
                 where: {
                     slug: id,
@@ -74,7 +83,6 @@ export const getProdutoById = async (req, res, next) => {
             if (produtoPorSlug) {
                 productId = produtoPorSlug.id_produto;
             } else {
-                // 3. FALLBACK: Se não achar o slug puro, roda a lógica antiga de quebrar por hífen no final
                 const parts = id.split('-');
                 const potentialId = parts[parts.length - 1];
 
@@ -86,7 +94,6 @@ export const getProdutoById = async (req, res, next) => {
             }
         }
 
-        // Mantém a chamada ao seu Model original utilizando o ID que localizamos acima
         const produto = await Produto.findById(productId, req.tenantId);
 
         if (!produto) {
@@ -245,7 +252,9 @@ export const createProduto = async (req, res, next) => {
             id_categoria, id_subcategoria, id_marca, id_fornecedor,
             subimagens = [], ml_attributes, composicao_pai = [],
             active_ecommerce, tipo_produto = 'FINAL', estoque_minimo = 0, unidade = 'UN',
-            motivo_rastreio, origem_rastreio, variacoes = [], duracao_minutos, ...productData
+            motivo_rastreio, origem_rastreio, variacoes = [], duracao_minutos,
+            grupos_complemento = [], 
+            ...productData
         } = req.body;
 
         if (!productData.nome || productData.preco === undefined) {
@@ -253,22 +262,21 @@ export const createProduto = async (req, res, next) => {
             throw new Error('Nome e preço são campos obrigatórios.');
         }
 
-        const estoqueTotal = variacoes.length > 0
+        // 🟢 CORREÇÃO: Só zera o estoque inserido manualmente se o cara mandou variações de verdade
+        const estoqueTotal = variacoes && variacoes.length > 0
             ? variacoes.reduce((acc, v) => acc + (Number(v.estoque) || 0), 0)
             : (Number(productData.estoque) || 0);
 
-        // 🟢 GERANDO O SLUG AUTOMÁTICO E ÚNICO
         const slugGerado = slugify(productData.nome, {
-            lower: true,      // Tudo em minúsculo
-            strict: true,     // Remove caracteres especiais especiais
-            locale: 'pt'      // Trata acentuações do português corretamente
+            lower: true,      
+            strict: true,     
+            locale: 'pt'      
         });
-        // Adiciona os 4 últimos dígitos do timestamp para evitar conflito de nomes idênticos
         const slugUnico = `${slugGerado}-${Date.now().toString().slice(-4)}`;
 
         const dataToCreate = {
             id_tenant: req.tenantId,
-            slug: slugUnico, // 🟢 Gravando o slug no banco de dados
+            slug: slugUnico,
             ...productData,
             id_externo: productData.id_externo ? String(productData.id_externo).trim() : null,
             preco: Number(productData.preco),
@@ -305,6 +313,25 @@ export const createProduto = async (req, res, next) => {
                     estoque: Number(v.estoque) || 0,
                     preco_adicional: Number(v.preco_adicional) || 0,
                     sku: v.sku || null
+                }))
+            } : undefined,
+            // 🟢 CRIAÇÃO DOS ADICIONAIS / PERSONALIZAÇÃO
+            grupos_complemento: grupos_complemento.length > 0 ? {
+                create: grupos_complemento.map((grupo, index) => ({
+                    id_tenant: req.tenantId,
+                    nome: String(grupo.nome),
+                    minimo: Number(grupo.minimo) || 0,
+                    maximo: Number(grupo.maximo) || 1,
+                    ordem: index,
+                    tipo_grupo: String(grupo.tipo_grupo || 'CHOICE'),
+                    complementos: {
+                        create: (grupo.complementos || []).map(comp => ({
+                            id_produto_add: Number(comp.id_produto_add),
+                            preco_adicional: Number(comp.preco_adicional) || 0,
+                            minimo: Number(comp.minimo) || 0,
+                            maximo: Number(comp.maximo) || 1
+                        }))
+                    }
                 }))
             } : undefined
         };
@@ -442,9 +469,11 @@ export const updateProduto = async (req, res, next) => {
             id_tenant,
             variacoes,
             duracao_minutos,
+            grupos_complemento, 
             ...productData
         } = req.body;
         const productId = Number(req.params.id);
+        
         let id_usuario_logado = req.user.id_usuario;
         if (id_usuario_logado === 'DONO') {
             id_usuario_logado = null;
@@ -471,24 +500,10 @@ export const updateProduto = async (req, res, next) => {
 
         const logsAuditoria = [];
         const camposIgnorados = [
-            'motivo_rastreio',
-            'origem_rastreio',
-            'subimagens',
-            'id_produto',
-            'visualizacoes',
-            'data_criacao',
-            'data_atualizacao',
-            'ml_status',
-            'mercado_livre_id',
-            'id_externo',
-            'tiktok_product_id',
-            'tiktok_video_url',
-            'url_shopee_original',
-            'custo',
-            'composicao_pai',
-            'composicao_filho',
-            'ordens_producao',
-            'variacoes'
+            'motivo_rastreio', 'origem_rastreio', 'subimagens', 'id_produto', 'visualizacoes',
+            'data_criacao', 'data_atualizacao', 'ml_status', 'mercado_livre_id', 'id_externo',
+            'tiktok_product_id', 'tiktok_video_url', 'url_shopee_original', 'custo',
+            'composicao_pai', 'composicao_filho', 'ordens_producao', 'variacoes', 'grupos_complemento'
         ];
 
         Object.keys(req.body).forEach(campo => {
@@ -546,9 +561,12 @@ export const updateProduto = async (req, res, next) => {
             } : undefined
         };
 
-        if (variacoes) {
+        // 🟢 CORREÇÃO: Só recalcula o estoque geral se enviarem variações. 
+        // Se a lista for vazia (ex: Hambúrguer), não zera o estoque que o dono digitou.
+        if (variacoes && variacoes.length > 0) {
             dataToUpdate.estoque = variacoes.reduce((acc, v) => acc + (Number(v.estoque) || 0), 0);
         }
+
         delete dataToUpdate.composicao_pai;
         delete dataToUpdate.composicao_filho;
         delete dataToUpdate.ordens_producao;
@@ -577,6 +595,37 @@ export const updateProduto = async (req, res, next) => {
                     }
                 });
             }
+
+            // 🟢 ATUALIZAÇÃO DOS ADICIONAIS / PERSONALIZAÇÃO
+            if (grupos_complemento) {
+                await tx.produto_grupos_complemento.deleteMany({ where: { id_produto: productId, id_tenant: req.tenantId } });
+                
+                if (grupos_complemento.length > 0) {
+                    for (let i = 0; i < grupos_complemento.length; i++) {
+                        const grupo = grupos_complemento[i];
+                        await tx.produto_grupos_complemento.create({
+                            data: {
+                                id_produto: productId,
+                                id_tenant: req.tenantId,
+                                nome: String(grupo.nome),
+                                minimo: Number(grupo.minimo) || 0,
+                                maximo: Number(grupo.maximo) || 1,
+                                ordem: i,
+                                tipo_grupo: String(grupo.tipo_grupo || 'CHOICE'),
+                                complementos: {
+                                    create: (grupo.complementos || []).map(comp => ({
+                                        id_produto_add: Number(comp.id_produto_add),
+                                        preco_adicional: Number(comp.preco_adicional) || 0,
+                                        minimo: Number(comp.minimo) || 0,
+                                        maximo: Number(comp.maximo) || 1
+                                    }))
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+
             return await tx.produtos.update({
                 where: { id_produto: productId },
                 data: dataToUpdate
@@ -953,4 +1002,3 @@ export const getProdutoRastreio = async (req, res, next) => {
         next(error);
     }
 };
-

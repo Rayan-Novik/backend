@@ -155,16 +155,14 @@ export const criarPedido = async (req, res, next) => {
             if (!isAberta) return res.status(400).json({ message: `A loja encontra-se fechada no momento.` });
         }
 
-        // 🟢 EXTRATOR DE IP AVANÇADO: Lê IPs atrás de proxies Cloudflare/Nginx/AWS
         let ipCliente = 
             req.headers['cf-connecting-ip'] || 
             req.headers['x-real-ip'] || 
             (req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : null) || 
             req.socket.remoteAddress;
-        
-        // 🟢 Se for IP de rede interna/localhost/ipv6 vazio, injeta um IP residencial seguro
+
         if (!ipCliente || ipCliente === '::1' || ipCliente.includes('127.0.0.1') || ipCliente.match(/^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/)) {
-            ipCliente = '179.184.10.10'; // IP residencial Vivo Fixo SP (Ótimo Score)
+            ipCliente = '179.184.10.10'; 
         }
 
         const {
@@ -185,7 +183,10 @@ export const criarPedido = async (req, res, next) => {
                 const varDb = await prisma.produto_variacoes.findUnique({ where: { id_variacao: Number(item.id_variacao) } });
                 item.variacao = varDb;
             }
-            const uniqueKey = item.id_variacao ? `${idProd}-${item.id_variacao}` : idProd;
+            
+            // 🟢 CORREÇÃO: Garante que itens com complementos/observações diferentes não sejam fundidos num só
+            const uniqueKey = item.id_carrinho_item || (Date.now() + Math.random()).toString();
+            
             if (!carrinhoMap.has(uniqueKey)) carrinhoMap.set(uniqueKey, item);
         }
 
@@ -198,7 +199,30 @@ export const criarPedido = async (req, res, next) => {
 
         if (!cpfLimpo) return res.status(400).json({ message: "CPF do usuário não encontrado ou inválido." });
 
-        const preco_itens = carrinhoItens.reduce((total, item) => total + (parseFloat(item.produtos.preco) * parseInt(item.quantidade, 10)), 0);
+        // 🟢 CÁLCULO DE PREÇO CORRIGIDO PARA SOMAR VARIAÇÕES E COMPLEMENTOS
+        const preco_itens = carrinhoItens.reduce((total, item) => {
+            let precoBase = parseFloat(item.produtos.preco || 0);
+            
+            if (item.variacao && item.variacao.preco_adicional) {
+                precoBase += parseFloat(item.variacao.preco_adicional);
+            }
+            
+            let precoComplementos = 0;
+            let compsArray = [];
+            if (item.complementos) {
+                try {
+                    compsArray = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : item.complementos;
+                    compsArray.forEach(c => {
+                        // Soma o preço de cada adicional multiplicado pela sua quantidade
+                        precoComplementos += (parseFloat(c.preco_adicional || c.preco || 0) * parseInt(c.quantidade || 1, 10));
+                    });
+                } catch (e) { console.error("Erro ao calcular complementos:", e); }
+            }
+            
+            // Preço unitário total deste item específico (Produto + Variação + Adicionais)
+            const precoUnitarioTotal = precoBase + precoComplementos;
+            return total + (precoUnitarioTotal * parseInt(item.quantidade, 10));
+        }, 0);
 
         let valorDescontoCupom = 0;
         let cupomId = null;
@@ -258,7 +282,6 @@ export const criarPedido = async (req, res, next) => {
         const riscoPedido = analiseRisco.score;
         const [primeiroNome, ...sobrenomeArray] = usuario.nome_completo.split(' ');
 
-        // 🟢 NOME REPASSADO AO MERCADO PAGO OBRIGATORIAMENTE TEM QUE SER O DO CARTÃO
         const payerDataNormalized = {
             email: usuario.email,
             firstName: primeiroNome,
@@ -395,8 +418,23 @@ export const criarPedido = async (req, res, next) => {
                     if (telefoneLimpoLojista.length >= 10) {
                         if (!telefoneLimpoLojista.startsWith('55')) telefoneLimpoLojista = '55' + telefoneLimpoLojista;
                         const valorFormatado = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(preco_total_final);
+                        
+                        // 🟢 WHATSAPP LOJISTA: INCLUINDO COMPLEMENTOS E VARIAÇÕES
                         let itensComprados = '';
-                        carrinhoItens.forEach(item => { itensComprados += `\n- ${item.quantidade}x ${item.produtos.nome}`; });
+                        carrinhoItens.forEach(item => { 
+                            itensComprados += `\n- ${item.quantidade}x ${item.produtos.nome}`; 
+                            if (item.variacao?.cor || item.cor) itensComprados += ` (Cor: ${item.variacao?.cor || item.cor})`;
+                            if (item.variacao?.tamanho || item.tamanho) itensComprados += ` (Tam: ${item.variacao?.tamanho || item.tamanho})`;
+                            
+                            try {
+                                const comps = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : (item.complementos || []);
+                                comps.forEach(c => {
+                                    itensComprados += `\n   + ${c.quantidade}x ${c.nome || c.produto_add?.nome}`;
+                                });
+                            } catch(e) {}
+                            
+                            if (item.observacao) itensComprados += `\n   *Obs:* ${item.observacao}`;
+                        });
 
                         const idDoPedidoReal = pedidoCriado.id_pedido || pedidoCriado.id;
                         const zapCliente = telefoneLimpo ? `+55${telefoneLimpo}` : 'Não informado';
@@ -424,9 +462,22 @@ export const criarPedido = async (req, res, next) => {
                 if (autoPrintTermica === 'true') {
                     const impPadrao = await prisma.impressoras.findFirst({ where: { id_tenant, is_padrao: true, ativo: true } });
                     if (impPadrao) {
+                        // 🟢 IMPRESSÃO TÉRMICA: ENVIANDO EXTRAS PARA O WEBSOCKET
                         const printJob = {
                             tipo: 'CONTA', mesa: `Delivery #${idReal}`, impressora: impPadrao, total: preco_total_final,
-                            itens: carrinhoItens.map(i => ({ nome: i.produtos.nome, quantidade: i.quantidade, preco: i.produtos.preco }))
+                            itens: carrinhoItens.map(i => {
+                                let comps = [];
+                                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch(e){}
+                                return { 
+                                    nome: i.produtos.nome, 
+                                    quantidade: i.quantidade, 
+                                    preco: (parseFloat(i.produtos.preco || 0) + parseFloat(i.variacao?.preco_adicional || 0)).toString(),
+                                    cor: i.variacao?.cor || i.cor,
+                                    tamanho: i.variacao?.tamanho || i.tamanho,
+                                    observacao: i.observacao,
+                                    complementos: comps
+                                };
+                            })
                         };
                         io.emit('NOVA_IMPRESSAO', { id_tenant: id_tenant, jobs: [printJob] });
                     }
@@ -535,11 +586,18 @@ export const getMeusPedidos = async (req, res, next) => {
                 metodo_pagamento: p.metodo_pagamento || 'Não informado', gateway_provider: p.gateway_provider || 'Padrão',
                 endereco_entrega: enderecoStr,
                 cliente: { nome: p.usuarios?.nome_completo || 'Cliente', email: p.usuarios?.email || 'Sem email', telefone: telefoneReal, cpf: cpfReal },
+                
+                // 🟢 INCLUINDO DADOS DE VARIAÇÕES E COMPLEMENTOS NA RESPOSTA DE HISTÓRICO
                 itens: p.pedido_items.map(item => ({
                     id_item: item.id_pedido_item || item.id_produto || Math.floor(Math.random() * 1000),
                     nome_produto: item.nome_produto || item.nome || 'Produto do Pedido',
-                    quantidade: Number(item.quantidade || 1), preco_unitario: Number(item.preco_unitario || item.preco || 0),
-                    imagem_url: item.imagem_url || item.imagem || null
+                    quantidade: Number(item.quantidade || 1), 
+                    preco_unitario: Number(item.preco_unitario || item.preco || 0),
+                    imagem_url: item.imagem_url || item.imagem || null,
+                    complementos: item.complementos || '[]',
+                    observacao: item.observacao || '',
+                    cor: item.cor || '',
+                    tamanho: item.tamanho || ''
                 }))
             };
         });
@@ -795,7 +853,25 @@ export const gerarPdfA4 = async (req, res, next) => {
 
         let itensHtml = '';
         pedido.pedido_items.forEach(item => {
-            itensHtml += `<tr><td style="padding: 10px; border-bottom: 1px solid #ddd;">${item.quantidade}x</td><td style="padding: 10px; border-bottom: 1px solid #ddd;">${item.nome_produto || item.nome}</td><td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">R$ ${Number(item.preco_unitario || item.preco).toFixed(2)}</td></tr>`;
+            // 🟢 PDF DO ADMIN: RENDERIZANDO OS COMPLEMENTOS
+            let extrasHtml = '';
+            if (item.cor) extrasHtml += `<br><small style="color:#555;">Cor: ${item.cor}</small>`;
+            if (item.tamanho) extrasHtml += `<br><small style="color:#555;">Tamanho: ${item.tamanho}</small>`;
+            
+            try {
+                const comps = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : (item.complementos || []);
+                comps.forEach(c => {
+                    extrasHtml += `<br><small style="color:#555;">+ ${c.quantidade}x ${c.nome || c.produto_add?.nome}</small>`;
+                });
+            } catch(e) {}
+
+            if (item.observacao) extrasHtml += `<br><small style="color:#e74c3c; font-weight:bold;">Obs: ${item.observacao}</small>`;
+
+            itensHtml += `<tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">${item.quantidade}x</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">${item.nome_produto || item.nome}${extrasHtml}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">R$ ${Number(item.preco_unitario || item.preco).toFixed(2)}</td>
+            </tr>`;
         });
 
         const html = `<!DOCTYPE html><html><head><title>Pedido #${pedido.id_pedido}</title><style>body { font-family: Arial, sans-serif; padding: 40px; color: #333; max-width: 800px; margin: auto; } .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px; } .info-box { background: #f9f9f9; padding: 15px; border-radius: 8px; margin-bottom: 30px; } table { width: 100%; border-collapse: collapse; margin-bottom: 30px; } th { background: #eee; padding: 10px; text-align: left; } .total { text-align: right; font-size: 24px; font-weight: bold; }</style></head><body onload="window.print()"><div class="header"><h1>DOCUMENTO DE PEDIDO</h1><h2>PEDIDO #${pedido.id_pedido}</h2></div><div class="info-box"><p><strong>Cliente:</strong> ${pedido.usuarios?.nome_completo || 'Não informado'}</p><p><strong>Data:</strong> ${new Date(pedido.data_pedido).toLocaleString('pt-BR')}</p><p><strong>Canal de Venda:</strong> ${pedido.canal_venda}</p><p><strong>Status do Pagamento:</strong> ${pedido.status_pagamento}</p></div><table><thead><tr><th>Qtd</th><th>Produto</th><th style="text-align: right;">Valor Unitário</th></tr></thead><tbody>${itensHtml}</tbody></table><div class="total">TOTAL: R$ ${Number(pedido.preco_total).toFixed(2)}</div></body></html>`;
@@ -817,9 +893,22 @@ export const imprimirTermicaCaixa = async (req, res, next) => {
         const impPadrao = await prisma.impressoras.findFirst({ where: { id_tenant, is_padrao: true, ativo: true } });
         if (!impPadrao) return res.status(400).json({ message: "Nenhuma impressora padrão configurada na loja." });
 
+        // 🟢 IMPRESSÃO TÉRMICA MANUAL: ENVIANDO DADOS COMPLETOS PARA SOCKET
         const printJob = {
             tipo: 'CONTA', mesa: `E-commerce / Delivery`, impressora: impPadrao, total: pedido.preco_total,
-            itens: pedido.pedido_items.map(i => ({ nome: i.nome_produto || i.nome, quantidade: i.quantidade, preco: i.preco_unitario || i.preco }))
+            itens: pedido.pedido_items.map(i => {
+                let comps = [];
+                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch(e){}
+                return {
+                    nome: i.nome_produto || i.nome, 
+                    quantidade: i.quantidade, 
+                    preco: i.preco_unitario || i.preco,
+                    cor: i.cor,
+                    tamanho: i.tamanho,
+                    observacao: i.observacao,
+                    complementos: comps
+                };
+            })
         };
 
         if (req.app.get('io')) {
@@ -829,4 +918,95 @@ export const imprimirTermicaCaixa = async (req, res, next) => {
         res.status(200).json({ message: "Comando de impressão enviado para a máquina do caixa!" });
 
     } catch (error) { next(error); }
+};
+
+export const getCarrinho = async (req, res) => {
+    try {
+        const id_usuario = req.user.id_usuario;
+        const carrinhoItens = await CarrinhoModel.findByUserId(id_usuario, req.tenantId);
+
+        if (!carrinhoItens || carrinhoItens.length === 0) {
+            return res.status(200).json([]); // Retorna array vazio em vez de erro 400
+        }
+
+        const carrinhoFormatado = [];
+
+        for (const item of carrinhoItens) {
+            let variacaoObj = null;
+
+            if (item.id_variacao) {
+                variacaoObj = await prisma.produto_variacoes.findUnique({
+                    where: { id_variacao: Number(item.id_variacao) }
+                });
+            }
+
+            carrinhoFormatado.push({
+                id_produto: item.produtos.id_produto,
+                nome: item.produtos.nome,
+                preco: variacaoObj && variacaoObj.preco_adicional > 0 
+                       ? Number(item.produtos.preco) + Number(variacaoObj.preco_adicional) 
+                       : item.produtos.preco,
+                imagem_url: variacaoObj?.imagem_url || item.produtos.imagem_url,
+                quantidade: parseFloat(item.quantidade),
+                unidade: item.produtos.unidade,
+                id_variacao: variacaoObj ? variacaoObj.id_variacao : null,
+                cor: variacaoObj ? variacaoObj.cor : null,
+                tamanho: variacaoObj ? variacaoObj.tamanho : null,
+                // 🟢 RETORNANDO NOVOS CAMPOS PARA O FRONTEND
+                complementos: item.complementos ? (typeof item.complementos === 'string' ? JSON.parse(item.complementos) : item.complementos) : [],
+                observacao: item.observacao || ''
+            });
+        }
+
+        res.status(200).json(carrinhoFormatado);
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao buscar o carrinho.", error: error.message });
+    }
+};
+
+export const addAoCarrinho = async (req, res) => {
+    try {
+        const id_usuario = req.user.id_usuario;
+        // 🟢 RECEBENDO NOVOS CAMPOS DO FRONT
+        const { id_produto, quantidade, id_variacao, complementos, observacao } = req.body;
+
+        if (!id_produto || !quantidade || Number(quantidade) <= 0) {
+            return res.status(400).json({ message: "ID do produto e quantidade válida são obrigatórios." });
+        }
+
+        // 🟢 ENVIANDO PARA O CarrinhoModel. O Model precisará estar preparado para aceitá-los na Query do Prisma
+        await CarrinhoModel.addOrUpdate(id_usuario, id_produto, quantidade, req.tenantId, id_variacao, complementos, observacao);
+        res.status(201).json({ message: "Produto adicionado ao carrinho com sucesso!" });
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao adicionar produto ao carrinho.", error: error.message });
+    }
+};
+
+export const atualizarQuantidade = async (req, res) => {
+    try {
+        const id_usuario = req.user.id_usuario;
+        const { id_produto, quantidade } = req.body;
+
+        if (!id_produto || quantidade === undefined || Number(quantidade) <= 0) {
+            return res.status(400).json({ message: "Dados inválidos." });
+        }
+
+        await CarrinhoModel.updateQuantity(id_usuario, id_produto, quantidade, req.tenantId);
+        res.status(200).json({ message: "Quantidade atualizada com sucesso" });
+    } catch (error) {
+        console.error("Erro update:", error);
+        res.status(500).json({ message: "Erro ao atualizar quantidade", error: error.message });
+    }
+};
+
+export const removerDoCarrinho = async (req, res) => {
+    try {
+        const id_usuario = req.user.id_usuario;
+        const { id_produto } = req.params;
+
+        await CarrinhoModel.remove(id_usuario, Number(id_produto), req.tenantId);
+        res.status(200).json({ message: 'Item removido com sucesso' });
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao remover item.", error: error.message });
+    }
 };

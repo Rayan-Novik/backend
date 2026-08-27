@@ -224,7 +224,7 @@ export const getStatusCaixa = async (req, res) => {
 };
 
 // ============================================================================
-// 🟢 VENDA PADRÃO DO PDV
+// 🟢 VENDA PADRÃO DO PDV (ATUALIZADA COM COMPLEMENTOS)
 // ============================================================================
 export const registrarVendaPDV = async (req, res, next) => {
     try {
@@ -251,18 +251,32 @@ export const registrarVendaPDV = async (req, res, next) => {
             const produtoReal = produtosDb.find(p => p.id_produto === itemFront.id_produto);
             if (!produtoReal) throw new Error(`Produto ID ${itemFront.id_produto} não encontrado.`);
 
-            const preco = Number(produtoReal.preco);
+            const precoBase = Number(produtoReal.preco);
             const quantidade = Number(itemFront.quantidade);
-            totalVenda += (preco * quantidade);
+            
+            // 🟢 Calcula o subtotal dos adicionais atrelados a este item
+            let subtotalComplementos = 0;
+            if (itemFront.complementos && itemFront.complementos.length > 0) {
+                itemFront.complementos.forEach(comp => {
+                    subtotalComplementos += (Number(comp.preco_adicional) * Number(comp.quantidade));
+                });
+            }
+
+            // O preço total leva em consideração os complementos também
+            totalVenda += ((precoBase + subtotalComplementos) * quantidade);
 
             return {
                 id_produto: produtoReal.id_produto,
                 nome: produtoReal.nome,
                 quantidade: quantidade,
-                preco: preco,
+                preco: precoBase,
                 imagem_url: produtoReal.imagem_url,
                 estoque_atual: Number(produtoReal.estoque),
-                receita: produtoReal.composicao_pai || []
+                receita: produtoReal.composicao_pai || [],
+                observacao: itemFront.observacao || null,
+                variacao_selecionada: itemFront.variacao_selecionada,
+                // 🟢 Carrega os complementos para injetar na tabela `pedido_items`
+                complementos: itemFront.complementos && itemFront.complementos.length > 0 ? itemFront.complementos : null
             };
         });
 
@@ -308,7 +322,10 @@ export const registrarVendaPDV = async (req, res, next) => {
                             nome: item.nome,
                             quantidade: item.quantidade,
                             preco: item.preco,
-                            imagem_url: item.imagem_url
+                            imagem_url: item.imagem_url,
+                            observacao: item.observacao || null,
+                            // 🟢 MÁGICA: Os adicionais vão todos em JSON
+                            complementos: item.complementos 
                         }))
                     }
                 },
@@ -320,9 +337,11 @@ export const registrarVendaPDV = async (req, res, next) => {
                 data: { saldo_sistema: { increment: totalVenda } }
             });
 
+            // Gerenciamento de Baixa de Estoque
             for (const item of itensParaSalvar) {
                 const idVariacao = item.variacao_selecionada?.id_variacao;
 
+                // 1. Baixa do Item Principal ou Variação
                 if (idVariacao) {
                     const variacaoDb = await tx.produto_variacoes.findUnique({ where: { id_variacao: Number(idVariacao) } });
                     if (variacaoDb) {
@@ -352,6 +371,33 @@ export const registrarVendaPDV = async (req, res, next) => {
                         }
                     });
                 }
+
+                // 🟢 2. Baixa de Estoque dos Complementos do PDV
+                if (item.complementos && item.complementos.length > 0) {
+                    for (const comp of item.complementos) {
+                        const qtdAdic = Number(comp.quantidade) || 1;
+                        const qtdTotalAdic = qtdAdic * item.quantidade;
+                        const prodAdic = await tx.produtos.findUnique({ where: { id_produto: Number(comp.id_produto_add) } });
+
+                        if (prodAdic) {
+                            await tx.produtos.update({
+                                where: { id_produto: prodAdic.id_produto },
+                                data: { estoque: { decrement: qtdTotalAdic } }
+                            });
+                            await tx.movimentacaoEstoque.create({
+                                data: {
+                                    id_produto: prodAdic.id_produto,
+                                    quantidade: qtdTotalAdic,
+                                    tipo: 'SAIDA',
+                                    saldo_momento: Number(prodAdic.estoque) - qtdTotalAdic,
+                                    motivo: `Venda PDV #${novoPedido.id_pedido} (Adicional)`,
+                                    origem_destino: 'PDV',
+                                    usuario_id: id_usuario_logado
+                                }
+                            });
+                        }
+                    }
+                }
             }
 
             return novoPedido;
@@ -376,26 +422,21 @@ export const registrarVendaPDV = async (req, res, next) => {
         // 🟢 INTEGRAÇÃO FISCAL: GERA A NFC-e AUTOMATICAMENTE NA VENDA DO CAIXA
         // ============================================================================
         try {
-            // Buscamos as configurações fiscais do lojista
             const configFiscal = await prisma.configuracoes_fiscais.findUnique({ where: { id_tenant } });
             
-            // Só gera a nota se o lojista já configurou o CNPJ no painel fiscal
             if (configFiscal && configFiscal.cnpj) {
                 const numero_gerado = configFiscal.proximo_numero_nfce;
                 const serie_gerada = configFiscal.serie_nfce;
                 const cnpjFormatado = String(configFiscal.cnpj).padStart(14, '0');
                 
-                // Gera os 9 dígitos aleatórios finais para o código da chave (incluindo o DV)
                 const codAleatorioComDV = Math.floor(100000000 + Math.random() * 900000000); 
                 
                 const mes = String(new Date().getMonth() + 1).padStart(2, '0');
                 const ano = String(new Date().getFullYear() % 100).padStart(2, '0');
                 
-                // Monta a chave exata de 44 dígitos (Modelo 65 = NFC-e)
                 const chaveAcessoFake = `13${ano}${mes}${cnpjFormatado}65${String(serie_gerada).padStart(3, '0')}${String(numero_gerado).padStart(9, '0')}1${codAleatorioComDV}`;
 
                 await prisma.$transaction(async (txFiscal) => {
-                    // 1. Cria o rascunho da Nota vinculada ao Pedido recém criado
                     const notaGerada = await txFiscal.notas_fiscais.create({
                         data: {
                             id_tenant,
@@ -411,7 +452,6 @@ export const registrarVendaPDV = async (req, res, next) => {
                         }
                     });
 
-                    // 2. Transfere os dados tributários de cada produto para os itens da Nota
                     for (const itemFront of itensParaSalvar) {
                         const prodDb = produtosDb.find(p => p.id_produto === itemFront.id_produto);
                         if (prodDb) {
@@ -430,9 +470,9 @@ export const registrarVendaPDV = async (req, res, next) => {
                                 }
                             });
                         }
+                        // (Opcional) Integração Fiscal dos Adicionais pode ser mapeada aqui futuramente se o contador exigir.
                     }
 
-                    // 3. Atualiza o contador de NFC-e para o próximo número
                     await txFiscal.configuracoes_fiscais.update({
                         where: { id_tenant },
                         data: { proximo_numero_nfce: { increment: 1 } }
@@ -441,9 +481,7 @@ export const registrarVendaPDV = async (req, res, next) => {
             }
         } catch (fiscalErr) {
             console.error("⚠️ Erro ao gerar rascunho fiscal no PDV:", fiscalErr);
-            // Capturado silenciosamente para não interromper a venda em caso de falha temporária
         }
-        // ============================================================================
 
         res.status(201).json({ message: "Venda realizada!", pedido: venda });
     } catch (error) {
@@ -452,7 +490,7 @@ export const registrarVendaPDV = async (req, res, next) => {
 };
 
 // ============================================================================
-// 🟢 NOVO: RECEBER RESTANTE DO AGENDAMENTO (SINAL ONLINE + RESTANTE NA LOJA)
+// 🟢 RECEBER RESTANTE DO AGENDAMENTO (SINAL ONLINE + RESTANTE NA LOJA)
 // ============================================================================
 export const receberSaldoPendente = async (req, res, next) => {
     try {
@@ -475,16 +513,12 @@ export const receberSaldoPendente = async (req, res, next) => {
         if (!pedido) return res.status(404).json({ message: "Pedido não encontrado." });
         if (pedido.status_pagamento === 'PAGO') return res.status(400).json({ message: "Este pedido já está totalmente pago." });
 
-        // 🟢 SISTEMA À PROVA DE BALAS: Calcula o valor restante dinamicamente
         let valorRestante = 0;
 
-        // Tenta achar a conta a receber
         const conta = await prisma.financeiro_contas_receber.findFirst({
             where: { id_pedido: pedido.id_pedido, id_tenant }
         });
 
-        // 🚀 SE LIGA AQUI: NÃO TEM MAIS O ERRO 404! 
-        // Se a conta não existir, ele vai pro "else" e calcula a diferença.
         if (conta) {
             valorRestante = Number(conta.saldo_restante);
         } else {
@@ -493,7 +527,6 @@ export const receberSaldoPendente = async (req, res, next) => {
             });
             const valorJaPago = transacoes.reduce((acc, t) => acc + Number(t.valor_bruto), 0);
             valorRestante = Number(pedido.preco_total) - valorJaPago;
-            console.log(`⚠️ Cálculo dinâmico: Pedido total R$${pedido.preco_total} - Já pago R$${valorJaPago} = Restam R$${valorRestante}`);
         }
         
         if (valorRestante <= 0) {
@@ -501,7 +534,6 @@ export const receberSaldoPendente = async (req, res, next) => {
              return res.status(400).json({ message: "O saldo deste pedido já está zerado." });
         }
 
-        // Verifica o troco
         const recebido = Number(valor_recebido || 0);
         let troco = 0;
         if (metodo_pagamento === 'DINHEIRO') {
@@ -512,7 +544,6 @@ export const receberSaldoPendente = async (req, res, next) => {
         const metodoCombinado = `${pedido.metodo_pagamento} + ${metodo_pagamento}`;
 
         await prisma.$transaction(async (tx) => {
-            // Atualiza o pedido combinando os dois métodos (Ex: "ONLINE_PIX + DINHEIRO")
             await tx.pedidos.update({
                 where: { id_pedido: pedido.id_pedido },
                 data: {
@@ -522,13 +553,11 @@ export const receberSaldoPendente = async (req, res, next) => {
                 }
             });
 
-            // Soma o dinheiro no gaveteiro virtual
             await tx.caixa_pdv.update({
                 where: { id_caixa: caixaAberto.id_caixa },
                 data: { saldo_sistema: { increment: valorRestante } }
             });
 
-            // Se a conta a receber existir, dá a baixa nela
             if (conta) {
                 await tx.financeiro_contas_receber.update({
                     where: { id_conta: conta.id_conta },
@@ -541,12 +570,11 @@ export const receberSaldoPendente = async (req, res, next) => {
             }
         });
 
-        // E por fim, gera a transação financeira real do restante no Livro Razão
         try {
             await registrarEntradaFinanceira({
                 id_pedido: pedido.id_pedido,
                 id_usuario: pedido.id_usuario,
-                gateway_provider: 'PDV', // Pagamento final foi no balcão
+                gateway_provider: 'PDV', 
                 gateway_id: `PDV-RESTO-${pedido.id_pedido}-${Date.now()}`,
                 valor_bruto: valorRestante,
                 valor_taxa_real: 0,
@@ -568,7 +596,7 @@ export const receberSaldoPendente = async (req, res, next) => {
 };
 
 // ============================================================================
-// 🟢 ROTAS DE IMPRESSÃO (ATUALIZADAS PARA EXIBIR PAGAMENTOS MÚLTIPLOS)
+// 🟢 ROTAS DE IMPRESSÃO (ATUALIZADAS PARA EXIBIR COMPLEMENTOS)
 // ============================================================================
 export const gerarPdfA4 = async (req, res, next) => {
     try {
@@ -582,7 +610,6 @@ export const gerarPdfA4 = async (req, res, next) => {
         
         if (!pedido) return res.status(404).json({ message: "Pedido não encontrado." });
 
-        // Busca o histórico financeiro daquele pedido
         const transacoes = await prisma.transacoes_financeiras.findMany({
             where: { id_pedido: pedido.id_pedido, id_tenant },
             orderBy: { data_criacao: 'asc' }
@@ -597,6 +624,19 @@ export const gerarPdfA4 = async (req, res, next) => {
                     <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">R$ ${Number(item.preco_unitario || item.preco).toFixed(2)}</td>
                 </tr>
             `;
+
+            // 🟢 MÁGICA: Varre o campo JSON para listar os adicionais
+            if (item.complementos && Array.isArray(item.complementos)) {
+                item.complementos.forEach(comp => {
+                    itensHtml += `
+                        <tr>
+                            <td style="padding: 5px 10px; border-bottom: 1px dotted #ccc;"></td>
+                            <td style="padding: 5px 10px; border-bottom: 1px dotted #ccc; color: #555; font-size: 13px;"> ↳ ${comp.quantidade}x ${comp.nome}</td>
+                            <td style="padding: 5px 10px; border-bottom: 1px dotted #ccc; text-align: right; color: #555; font-size: 13px;">R$ ${Number(comp.preco_adicional).toFixed(2)}</td>
+                        </tr>
+                    `;
+                });
+            }
         });
 
         let pagamentosHtml = '';
@@ -703,9 +743,11 @@ export const imprimirTermicaCaixa = async (req, res, next) => {
             itens: pedido.pedido_items.map(i => ({ 
                 nome: i.nome_produto || i.nome, 
                 quantidade: i.quantidade, 
-                preco: i.preco_unitario || i.preco 
+                preco: i.preco_unitario || i.preco,
+                // 🟢 Repassa os complementos JSON para a ponte térmica renderizar
+                complementos: i.complementos || [] 
             })),
-            pagamentos: historicoPagto // Enviando os pagamentos fragmentados para a térmica
+            pagamentos: historicoPagto 
         };
 
         if (req.app.get('io')) {
@@ -791,7 +833,7 @@ export const getRelatorioFechamento = async (req, res, next) => {
 
         const caixa = await prisma.caixa_pdv.findFirst({
             where: { id_caixa: Number(id_caixa), id_tenant },
-            include: { funcionarios: { select: { nome_completo: true } } } // 🟢 CORRIGIDO AQUI
+            include: { funcionarios: { select: { nome_completo: true } } } 
         });
 
         if (!caixa) return res.status(404).json({ message: "Caixa não encontrado." });
@@ -825,7 +867,7 @@ export const getRelatorioFechamento = async (req, res, next) => {
         const relatorio = {
             info: {
                 id: caixa.id_caixa, 
-                operador: caixa.funcionarios?.nome_completo || 'Operador não identificado', // 🟢 CORRIGIDO AQUI
+                operador: caixa.funcionarios?.nome_completo || 'Operador não identificado', 
                 abertura: caixa.data_abertura,
                 fechamento: caixa.data_fechamento, status: caixa.status, observacoes: caixa.observacoes
             },

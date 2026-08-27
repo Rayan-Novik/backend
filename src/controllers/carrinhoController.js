@@ -1,4 +1,6 @@
 import CarrinhoModel from '../models/carrinhoModel.js';
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
 
 export const getCarrinho = async (req, res) => {
     try {
@@ -6,12 +8,11 @@ export const getCarrinho = async (req, res) => {
         const carrinhoItens = await CarrinhoModel.findByUserId(id_usuario, req.tenantId);
 
         if (!carrinhoItens || carrinhoItens.length === 0) {
-            return res.status(200).json([]); // Retorna array vazio em vez de erro 400
+            return res.status(200).json([]);
         }
 
         const carrinhoFormatado = [];
 
-        // 🟢 BUSCA AS VARIAÇÕES MANUAIS NO BANCO
         for (const item of carrinhoItens) {
             let variacaoObj = null;
 
@@ -32,7 +33,10 @@ export const getCarrinho = async (req, res) => {
                 unidade: item.produtos.unidade,
                 id_variacao: variacaoObj ? variacaoObj.id_variacao : null,
                 cor: variacaoObj ? variacaoObj.cor : null,
-                tamanho: variacaoObj ? variacaoObj.tamanho : null
+                tamanho: variacaoObj ? variacaoObj.tamanho : null,
+                // 🟢 RETORNA OS DADOS NOVOS PARA O FRONTEND
+                complementos: item.complementos ? (typeof item.complementos === 'string' ? JSON.parse(item.complementos) : item.complementos) : [],
+                observacao: item.observacao || ''
             });
         }
 
@@ -45,13 +49,15 @@ export const getCarrinho = async (req, res) => {
 export const addAoCarrinho = async (req, res) => {
     try {
         const id_usuario = req.user.id_usuario;
-        const { id_produto, quantidade, id_variacao } = req.body;
+        // 🟢 CAPTURANDO OS CAMPOS NOVOS AQUI
+        const { id_produto, quantidade, id_variacao, complementos, observacao } = req.body;
 
         if (!id_produto || !quantidade || Number(quantidade) <= 0) {
             return res.status(400).json({ message: "ID do produto e quantidade válida são obrigatórios." });
         }
 
-        await CarrinhoModel.addOrUpdate(id_usuario, id_produto, quantidade, req.tenantId, id_variacao);
+        // 🟢 PASSANDO OS CAMPOS NOVOS PARA O MODEL
+        await CarrinhoModel.addOrUpdate(id_usuario, id_produto, quantidade, req.tenantId, id_variacao, complementos, observacao);
         res.status(201).json({ message: "Produto adicionado ao carrinho com sucesso!" });
     } catch (error) {
         res.status(500).json({ message: "Erro ao adicionar produto ao carrinho.", error: error.message });
@@ -61,13 +67,14 @@ export const addAoCarrinho = async (req, res) => {
 export const atualizarQuantidade = async (req, res) => {
     try {
         const id_usuario = req.user.id_usuario;
-        const { id_produto, quantidade } = req.body;
+        // 🟢 CAPTURANDO OS CAMPOS NOVOS AQUI TAMBÉM
+        const { id_produto, quantidade, id_variacao, complementos, observacao } = req.body;
 
         if (!id_produto || quantidade === undefined || Number(quantidade) <= 0) {
             return res.status(400).json({ message: "Dados inválidos." });
         }
 
-        await CarrinhoModel.updateQuantity(id_usuario, id_produto, quantidade, req.tenantId);
+        await CarrinhoModel.updateQuantity(id_usuario, id_produto, quantidade, req.tenantId, id_variacao, complementos, observacao);
         res.status(200).json({ message: "Quantidade atualizada com sucesso" });
     } catch (error) {
         console.error("Erro update:", error);
@@ -79,10 +86,12 @@ export const removerDoCarrinho = async (req, res) => {
     try {
         const id_usuario = req.user.id_usuario;
         const { id_produto } = req.params;
+        // 🟢 CAPTURANDO OS DADOS QUE VÊM DA REQUISIÇÃO (DELETE via axios.delete { data: {...} })
+        const { id_variacao, complementos, observacao } = req.body; 
 
-        await CarrinhoModel.remove(id_usuario, Number(id_produto), req.tenantId);
+        await CarrinhoModel.remove(id_usuario, Number(id_produto), req.tenantId, id_variacao, complementos, observacao);
         res.status(200).json({ message: 'Item removido com sucesso' });
     } catch (error) {
         res.status(500).json({ message: "Erro ao remover item.", error: error.message });
     }
-};
+};  
