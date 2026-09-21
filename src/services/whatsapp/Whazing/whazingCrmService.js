@@ -12,11 +12,11 @@ class WhazingCrmService {
             where: { id_tenant: Number(tenantId) }
         });
 
-        if (!config || !config.api_id || !config.token) {
+        if (!config || !config.api_id) {
             throw new Error("Credenciais do Whazing não configuradas para esta loja no painel.");
         }
 
-        const baseUrl = config.base_url || 'https://core.azun.com.br/v1/api/external';
+        const baseUrl = config.base_url;
 
         return {
             api: axios.create({

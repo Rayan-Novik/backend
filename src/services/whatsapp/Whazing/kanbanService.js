@@ -11,11 +11,11 @@ class KanbanService {
             where: { id_tenant: Number(tenantId) }
         });
 
-        if (!config || !config.api_id || !config.token) {
+        if (!config || !config.api_id) {
             throw new Error("Credenciais do Kanban não configuradas para esta loja no painel.");
         }
 
-        const baseUrl = config.base_url || 'https://core.azun.com.br/v1/api/external';
+        const baseUrl = config.base_url;
 
         return axios.create({
             baseURL: `${baseUrl}/${config.api_id}/kanbanpro`,

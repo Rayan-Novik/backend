@@ -67,13 +67,29 @@ export const tenantResolver = async (req, res, next) => {
         // 🛑 A BARREIRA DE SEGURANÇA (Adeus vazamento de dados!)
         // =========================================================
 
-        // 🚀 AQUI ESTÁ A CORREÇÃO: Adicionado o '/webhooks' na lista para liberar retornos de gateway!
-        const rotasLivres = ['/register', '/planos-publicos', '/admin-login', '/staff-login', '/webhooks', '/public/', '/api/v2', '/v1'];
+        // 🚀 AQUI ESTÁ A CORREÇÃO: Adicionamos '/kanban', '/apikeys' e '/whazing-config' 
+        // Eles já são protegidos pelo Token JWT (protect) lá nas rotas, 
+        // então não precisam que o tenantResolver bloqueie se faltar o slug.
+        const rotasLivres = [
+            '/register', 
+            '/planos-publicos', 
+            '/admin-login', 
+            '/staff-login', 
+            '/webhooks', 
+            '/public/', 
+            '/api/v2', 
+            '/v1',
+            '/kanban',            // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+            '/apikeys',           // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+            '/whazing-config',    // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+            '/integracao'         // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+        ];
+        
         const isPublicRoute = rotasLivres.some(rota => req.originalUrl.includes(rota));
 
         if (!tenant || !tenant.ativo) {
             if (isPublicRoute) {
-                // Se for rota pública ou API Externa, deixa passar para o próximo middleware autenticar!
+                // Se for rota de Admin (que usa JWT) ou API Externa, deixa passar!
                 return next();
             }
 
