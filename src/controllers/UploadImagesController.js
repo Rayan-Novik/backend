@@ -103,7 +103,7 @@ export const uploadImage = async (req, res, next) => {
 
             const result = await cloudinary.uploader.upload(dataURI, {
                 folder: `produtos/loja_${id_tenant}`, 
-                resource_type: "auto",
+                resource_type: "image", // Ajustado de "auto" para "image" para evitar bloqueios de formato
                 // Removido fetch_format: "auto" pois a imagem já está fisicamente em AVIF agora
                 transformation: [{ quality: "auto" }] 
             });
@@ -118,9 +118,17 @@ export const uploadImage = async (req, res, next) => {
         });
 
     } catch (error) {
-        console.error(`❌ Erro no upload (${error.message})`);
+        // Extrai a mensagem dependendo da estrutura do erro (Cloudinary, Axios ou nativo)
+        let errorMsg = error.message || error.error?.message;
         
-        let errorMsg = error.message;
+        // Se ainda for vazio, converte o objeto de erro para string para não perdermos o log
+        if (!errorMsg) {
+            errorMsg = typeof error === 'string' ? error : JSON.stringify(error);
+        }
+
+        console.error(`❌ Erro no upload (${errorMsg})`);
+        
+        // Tratamento específico para erros de resposta HTTP (como o Axios para ImgBB)
         if (error.response?.data?.error?.message) {
             errorMsg = `API Imagem: ${error.response.data.error.message}`;
         }

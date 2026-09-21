@@ -49,11 +49,12 @@ import publicApiRoutes from './apiKeysRoutes.js';
 import publicIntegrationRoutes from './publicIntegrationRoutes.js';
 import agendamentoRoutes from './agendamentoRoutes.js';
 import modulosRoutes from './modulosRoutes.js';
-
+import kanbanRoutes from './kanbanRoutes.js';
 // 🟢 NOVOS IMPORTS: Comandas e Mesas
 import comandaRoutes from './comandaRoutes.js';
 import autoatendimentoRoutes from './autoatendimentoRoutes.js';
 import mesasRoutes from './mesasRoutes.js';
+import whazingConfigRoutes from './whazingConfigRoutes.js';
 
 // 🟢 NOVO IMPORT: Impressoras
 import impressoraRoutes from './impressoraRoutes.js';
@@ -123,6 +124,10 @@ router.use('/sitemap.xml', sitemapRoutes);
 router.use('/cargos', cargoRoutes);
 router.use('/ifood', ifoodRoutes);
 router.use('/agendamentos', agendamentoRoutes);
+router.use('/kanban', kanbanRoutes);
+
+// 🟢 ROTA DA CONFIGURAÇÃO DO WHAZING/KANBAN
+router.use('/whazing-config', whazingConfigRoutes);
 
 // ============================================================================
 // 🚀 ROTA DA API PÚBLICA EXTERNA (Acessada via x-api-key)

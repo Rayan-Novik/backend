@@ -1,5 +1,6 @@
 import { server } from './app.js'; 
 import { initCron } from './services/cronManager.js'; 
+import 'dotenv/config';
 
 const PORT = process.env.SERVER_PORT || 5000;
 

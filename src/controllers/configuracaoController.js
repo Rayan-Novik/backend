@@ -109,8 +109,6 @@ export const getStorePublicConfig = async (req, res, next) => {
             ConfiguracaoModel.get('CONSUMO_LOCAL_ATIVO', tenantId) 
         ]);
 
-        // ... (resto do seu código do WhatsApp continua igual)
-
         let isWhatsappActive = false;
         try {
             const whatsStatus = getWhatsAppStatus(String(tenantId));
@@ -249,8 +247,6 @@ export const updateHomepageLayout = async (req, res, next) => {
     }
 };
 
-// 🟢 NOVAS FUNÇÕES ADICIONADAS AQUI PARA O ERRO 404 DO /gerais
-
 // 🟢 BUSCAR TODAS AS CONFIGURAÇÕES GERAIS DA LOJA
 export const getConfiguracoesGerais = async (req, res) => {
     try {
@@ -266,10 +262,9 @@ export const getConfiguracoesGerais = async (req, res) => {
 // 🟢 SALVAR/ATUALIZAR CONFIGURAÇÕES (Dinâmico para qualquer chave)
 export const updateConfiguracoesGerais = async (req, res) => {
     try {
-        const configuracoes = req.body; // Ex: { RETIRADA_ATIVA: "true", CONSUMO_LOCAL_ATIVO: "false" }
+        const configuracoes = req.body; 
         const id_tenant = req.tenantId;
 
-        // Usa o ConfiguracaoModel nativo para garantir que a criptografia do sistema seja aplicada!
         const promessas = Object.entries(configuracoes).map(([chave, valor]) => {
             return ConfiguracaoModel.set(String(chave), String(valor), id_tenant);
         });
@@ -284,7 +279,8 @@ export const updateConfiguracoesGerais = async (req, res) => {
 };
 
 // =========================================================
-
+// 🟢 FUNÇÕES QUE O MODAL DO KANBAN ESTÁ USANDO!
+// =========================================================
 export const getConfiguracaoByKey = async (req, res, next) => {
     try {
         const { chave } = req.params;
@@ -309,6 +305,5 @@ export const saveConfiguracao = async (req, res, next) => {
         next(error);
     }
 };
-
 
 export const updateConfiguracao = saveConfiguracao;

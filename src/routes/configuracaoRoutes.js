@@ -23,12 +23,10 @@ import { requirePermission } from '../middlewares/permissionMiddleware.js';
 // 🔓 ROTAS PÚBLICAS (Para a Vitrine / Checkout)
 // ==========================================================
 
-// 🟢 CORREÇÃO DO ERRO 404: Esta rota aceita a palavra 'default' ou o tenantId/slug para carregar a vitrine!
 router.get('/public/:tenantId', getStorePublicConfig);
-
 router.get('/public', getPublicConfiguracoes);
 router.get('/payment-config', getPaymentConfig);
-router.get('/appearance', getAppearanceSettings); // Get público para carregar as cores
+router.get('/appearance', getAppearanceSettings); 
 router.get('/pix-desconto', getPixDiscountConfig);
 router.get('/homepage-layout', getHomepageLayout);
 
@@ -48,14 +46,13 @@ router.post('/homepage-layout', protect, requirePermission('CONFIG_APARENCIA'), 
 // 3. Financeiro (Desconto Pix)
 router.post('/pix-desconto', protect, requirePermission('CONFIG_PIX'), updatePixDiscountConfig);
 
-// 4. Rota genérica para salvar (Unitário)
-// Como é genérica, o ideal é manter uma permissão mais alta ou de integração
+// 4. Rota genérica para salvar (Unitário) - USADA PELO KANBAN MODAL!
 router.post('/', protect, requirePermission('CONFIG_INTEGRATIONS'), saveConfiguracao);
 
 // ==================================================================
 // 🚀 ROTA DINÂMICA (DEVE SEMPRE FICAR NO FINAL DO ARQUIVO)
 // ==================================================================
-// Busca por chave específica - requer permissão de integrador/admin
+// Busca por chave específica - USADA PELO KANBAN MODAL!
 router.get('/:chave', protect, requirePermission('CONFIG_INTEGRATIONS'), getConfiguracaoByKey);
     
 export default router;

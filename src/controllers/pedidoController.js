@@ -9,7 +9,8 @@ import { syncEstoqueIfoodAutomated } from './integration/ifood/produtoIfoodContr
 
 import { sendWhatsAppMessage } from '../services/whatsapp/sender.js';
 import { sendWhatsAppPaymentReceipt } from '../services/whatsapp/templates.js';
-
+import WhazingDbService from '../services/whatsapp/Whazing/whazingDbService.js';
+import kanbanService from '../services/whatsapp/Whazing/kanbanService.js';
 import UsuarioModel from '../models/usuarioModel.js';
 import Produto from '../models/produtoModel.js';
 import { decrypt } from '../services/cryptoService.js';
@@ -113,6 +114,157 @@ const notificarCliente = async (pedidoDb, tipoMensagem, id_tenant) => {
     }
 };
 
+// =========================================================================
+// 🟢 FUNÇÃO DE INTEGRAÇÃO COM O KANBAN PRO (USANDO A API OFICIAL DE CONTATOS)
+// =========================================================================
+export const sincronizarPedidoKanban = async (idPedidoReal, telefoneCliente, nomeCliente, carrinhoItens, precoTotal, statusPagamento, id_tenant) => {
+    try {
+        const kanbanConfig = await prisma.whazing_configuracoes.findUnique({
+            where: { id_tenant: Number(id_tenant) }
+        });
+
+        if (!kanbanConfig || !kanbanConfig.api_id || !kanbanConfig.token || !kanbanConfig.board_pedidos_id) {
+            return;
+        }
+
+        let baseUrl = kanbanConfig.base_url || 'https://core.azun.com.br/v1/api/external';
+        if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+        if (!baseUrl.includes('/v1/api/external')) baseUrl = `${baseUrl}/v1/api/external`;
+
+        const apiId = kanbanConfig.api_id;
+        const token = kanbanConfig.token;
+        const boardId = kanbanConfig.board_pedidos_id;
+
+        const columnMap = {
+            'PENDENTE': kanbanConfig.col_pendente_id,
+            'PAGO': kanbanConfig.col_pago_id,
+            'RECUSADO': kanbanConfig.col_recusado_id
+        };
+
+        const targetColumnId = columnMap[statusPagamento.toUpperCase()] || kanbanConfig.col_pendente_id;
+        if (!targetColumnId) return;
+
+        // 1. Busca ou Cria Contato
+        let contactIdDoKanban = null;
+        if (telefoneCliente) {
+            let numLimpo = telefoneCliente.replace(/\D/g, '');
+            if (!numLimpo.startsWith('55') && numLimpo.length >= 10) numLimpo = '55' + numLimpo;
+
+            try {
+                const searchRes = await axios.post(`${baseUrl}/${apiId}/contact`, 
+                    { number: String(numLimpo) }, 
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+                const contactData = searchRes.data?.data || searchRes.data;
+                if (contactData && (contactData.id || contactData.contactId)) contactIdDoKanban = contactData.id || contactData.contactId;
+            } catch (e) { }
+
+            if (!contactIdDoKanban) {
+                try {
+                    const createRes = await axios.post(`${baseUrl}/${apiId}/createcontact`, 
+                        { name: nomeCliente || 'Cliente E-commerce', number: String(numLimpo) }, 
+                        { headers: { 'Authorization': `Bearer ${token}` } }
+                    );
+                    const newData = createRes.data?.data || createRes.data;
+                    if (newData && (newData.id || newData.contactId)) contactIdDoKanban = newData.id || newData.contactId;
+                } catch (e) { }
+            }
+        }
+
+        if (!contactIdDoKanban) return; 
+
+        // 2. Monta os Textos e Itens
+        let itensComprados = '';
+        carrinhoItens.forEach(item => {
+            const prodName = item.produtos?.nome || 'Produto';
+            itensComprados += `- ${item.quantidade}x ${prodName}\n`;
+            if (item.variacao?.cor || item.cor) itensComprados += `  Cor: ${item.variacao?.cor || item.cor}\n`;
+            if (item.variacao?.tamanho || item.tamanho) itensComprados += `  Tam: ${item.variacao?.tamanho || item.tamanho}\n`;
+
+            try {
+                const comps = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : (item.complementos || []);
+                comps.forEach(c => { itensComprados += `  + ${c.quantidade}x ${c.nome || c.produto_add?.nome}\n`; });
+            } catch (e) { }
+
+            if (item.observacao) itensComprados += `  *Obs:* ${item.observacao}\n`;
+        });
+
+        const notaDoCard = `*Pedido Online #${idPedidoReal}*\n` +
+            `📅 Data: ${new Date().toLocaleDateString('pt-BR')}\n` +
+            `👤 Cliente: ${nomeCliente}\n` +
+            `📞 WhatsApp: ${telefoneCliente || 'Não informado'}\n` +
+            `💰 Valor: R$ ${precoTotal.toFixed(2)}\n\n` +
+            `🛍️ *Itens:*\n${itensComprados}\n`;
+        
+        // 3. CRIA O CARD BÁSICO
+        const payload = {
+            boardId: Number(boardId),
+            columnId: Number(targetColumnId),
+            action: "create_or_move",
+            title: `Pedido Online #${idPedidoReal} - ${nomeCliente}`,
+            priority: statusPagamento === 'PAGO' ? 'high' : 'medium',
+            contactId: contactIdDoKanban 
+        };
+
+        const response = await axios.post(`${baseUrl}/${apiId}/kanbanpro/card`, payload, { headers: { 'Authorization': `Bearer ${token}` } });
+
+        // =======================================================
+        // 4. PESCA O ID INFALÍVEL DO CARD QUE ACABOU DE SER GERADO
+        // =======================================================
+        let cardCriadoId = response.data?.id || response.data?.data?.id;
+        
+        if (!cardCriadoId) {
+            await new Promise(resolve => setTimeout(resolve, 1500)); 
+            cardCriadoId = await WhazingDbService.getLatestCardByContact(contactIdDoKanban, boardId);
+        }
+
+        if (cardCriadoId) {
+            
+            // 4.1 Injeta Rótulo (Se não existir, CRIA O RÓTULO AUTOMATICAMENTE!)
+            let arrayRotulos = [];
+            try {
+                const labelsRes = await WhazingDbService.getLabelsByBoard(boardId);
+                let matchingLabel = labelsRes.find(l => String(l.name).toUpperCase() === String(statusPagamento).toUpperCase());
+                
+                if (!matchingLabel) {
+                    const corRotulo = statusPagamento.toUpperCase() === 'PAGO' ? '#36b37e' : (statusPagamento.toUpperCase() === 'RECUSADO' ? '#ff5630' : '#ff991f');
+                    matchingLabel = await WhazingDbService.createLabel(boardId, statusPagamento.toUpperCase(), corRotulo);
+                }
+
+                if (matchingLabel && matchingLabel.id) {
+                    arrayRotulos.push(matchingLabel.id);
+                }
+            } catch (e) { console.error("⚠️ Erro gerenciando rótulos:", e.message); }
+
+            // 4.2 ATUALIZA TUDO NO BANCO (Data Início, Valor, Descrição e Rótulos)
+            await WhazingDbService.updateCardCompleto(cardCriadoId, {
+                dealValue: precoTotal,
+                note: notaDoCard,
+                startDate: new Date().toISOString(),
+                labelIds: arrayRotulos
+            });
+
+            // 4.3 Cria os Checklists
+            for (const item of carrinhoItens) {
+                try {
+                    const itemName = item.produtos?.nome || 'Item do Pedido';
+                    await axios.post(
+                        `${baseUrl}/${apiId}/kanbanpro/cards/${cardCriadoId}/checklists`,
+                        { text: itemName, title: itemName, isCompleted: false },
+                        { headers: { 'Authorization': `Bearer ${token}` } }
+                    );
+                } catch (e) { }
+            }
+            console.log(`✅ [KANBAN] Pedido #${idPedidoReal} sincronizado COM SUCESSO! Rótulos e Checklist injetados.`);
+        } else {
+            console.log("⚠️ [KANBAN] Card foi criado, mas não conseguimos localizar o ID no banco a tempo para preencher os extras.");
+        }
+
+    } catch (error) {
+        console.error("❌ [KANBAN] Erro ao sincronizar pedido (Card):", error.message);
+    }
+};
+
 export const criarPreferenciaMP = async (req, res) => {
     try {
         const { total, description } = req.body;
@@ -155,14 +307,14 @@ export const criarPedido = async (req, res, next) => {
             if (!isAberta) return res.status(400).json({ message: `A loja encontra-se fechada no momento.` });
         }
 
-        let ipCliente = 
-            req.headers['cf-connecting-ip'] || 
-            req.headers['x-real-ip'] || 
-            (req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : null) || 
+        let ipCliente =
+            req.headers['cf-connecting-ip'] ||
+            req.headers['x-real-ip'] ||
+            (req.headers['x-forwarded-for'] ? req.headers['x-forwarded-for'].split(',')[0].trim() : null) ||
             req.socket.remoteAddress;
 
         if (!ipCliente || ipCliente === '::1' || ipCliente.includes('127.0.0.1') || ipCliente.match(/^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/)) {
-            ipCliente = '179.184.10.10'; 
+            ipCliente = '179.184.10.10';
         }
 
         const {
@@ -183,10 +335,8 @@ export const criarPedido = async (req, res, next) => {
                 const varDb = await prisma.produto_variacoes.findUnique({ where: { id_variacao: Number(item.id_variacao) } });
                 item.variacao = varDb;
             }
-            
-            // 🟢 CORREÇÃO: Garante que itens com complementos/observações diferentes não sejam fundidos num só
+
             const uniqueKey = item.id_carrinho_item || (Date.now() + Math.random()).toString();
-            
             if (!carrinhoMap.has(uniqueKey)) carrinhoMap.set(uniqueKey, item);
         }
 
@@ -199,27 +349,24 @@ export const criarPedido = async (req, res, next) => {
 
         if (!cpfLimpo) return res.status(400).json({ message: "CPF do usuário não encontrado ou inválido." });
 
-        // 🟢 CÁLCULO DE PREÇO CORRIGIDO PARA SOMAR VARIAÇÕES E COMPLEMENTOS
         const preco_itens = carrinhoItens.reduce((total, item) => {
             let precoBase = parseFloat(item.produtos.preco || 0);
-            
+
             if (item.variacao && item.variacao.preco_adicional) {
                 precoBase += parseFloat(item.variacao.preco_adicional);
             }
-            
+
             let precoComplementos = 0;
             let compsArray = [];
             if (item.complementos) {
                 try {
                     compsArray = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : item.complementos;
                     compsArray.forEach(c => {
-                        // Soma o preço de cada adicional multiplicado pela sua quantidade
                         precoComplementos += (parseFloat(c.preco_adicional || c.preco || 0) * parseInt(c.quantidade || 1, 10));
                     });
                 } catch (e) { console.error("Erro ao calcular complementos:", e); }
             }
-            
-            // Preço unitário total deste item específico (Produto + Variação + Adicionais)
+
             const precoUnitarioTotal = precoBase + precoComplementos;
             return total + (precoUnitarioTotal * parseInt(item.quantidade, 10));
         }, 0);
@@ -316,7 +463,7 @@ export const criarPedido = async (req, res, next) => {
             issuer_id: paymentData.issuer_id,
             items: itemsParaGateway,
             device_id: device_id,
-            ip_address: ipCliente, 
+            ip_address: ipCliente,
             orderId: `PED-${Date.now()}`,
             payer: { ...payerDataNormalized, email: paymentData.payer?.email || payerDataNormalized.email },
             card: paymentData.card
@@ -342,6 +489,13 @@ export const criarPedido = async (req, res, next) => {
             id_tenant: id_tenant,
             ...snapshotEndereco
         }, carrinhoItens, id_tenant);
+
+        // ==========================================================
+        // 🟢 INTEGRAÇÃO KANBAN (MULTITENANT): Passando o id_tenant!
+        // ==========================================================
+        const idPedidoReal = pedidoCriado.id_pedido || pedidoCriado.id;
+        await sincronizarPedidoKanban(idPedidoReal, telefoneLimpo, usuario.nome_completo, carrinhoItens, preco_total_final, statusPagamento, id_tenant);
+        // ==========================================================
 
         try {
             for (const item of carrinhoItens) {
@@ -398,7 +552,7 @@ export const criarPedido = async (req, res, next) => {
             });
         }
 
-        try { await gerarRecebivelDePedido(pedidoCriado, id_tenant); } catch (finError) {}
+        try { await gerarRecebivelDePedido(pedidoCriado, id_tenant); } catch (finError) { }
 
         const isOffline = String(paymentMethod).toUpperCase().includes('OFFLINE');
 
@@ -418,32 +572,30 @@ export const criarPedido = async (req, res, next) => {
                     if (telefoneLimpoLojista.length >= 10) {
                         if (!telefoneLimpoLojista.startsWith('55')) telefoneLimpoLojista = '55' + telefoneLimpoLojista;
                         const valorFormatado = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(preco_total_final);
-                        
-                        // 🟢 WHATSAPP LOJISTA: INCLUINDO COMPLEMENTOS E VARIAÇÕES
+
                         let itensComprados = '';
-                        carrinhoItens.forEach(item => { 
-                            itensComprados += `\n- ${item.quantidade}x ${item.produtos.nome}`; 
+                        carrinhoItens.forEach(item => {
+                            itensComprados += `\n- ${item.quantidade}x ${item.produtos.nome}`;
                             if (item.variacao?.cor || item.cor) itensComprados += ` (Cor: ${item.variacao?.cor || item.cor})`;
                             if (item.variacao?.tamanho || item.tamanho) itensComprados += ` (Tam: ${item.variacao?.tamanho || item.tamanho})`;
-                            
+
                             try {
                                 const comps = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : (item.complementos || []);
                                 comps.forEach(c => {
                                     itensComprados += `\n   + ${c.quantidade}x ${c.nome || c.produto_add?.nome}`;
                                 });
-                            } catch(e) {}
-                            
+                            } catch (e) { }
+
                             if (item.observacao) itensComprados += `\n   *Obs:* ${item.observacao}`;
                         });
 
-                        const idDoPedidoReal = pedidoCriado.id_pedido || pedidoCriado.id;
                         const zapCliente = telefoneLimpo ? `+55${telefoneLimpo}` : 'Não informado';
-                        const msgLojista = `🔔 *NOVO PEDIDO RECEBIDO!* 🔔\n\nOlá, equipe da *${nomeDaLoja}*!\nVocês acabam de receber um novo pedido.\n\n📦 *Pedido:* #${idDoPedidoReal}\n👤 *Cliente:* ${usuario.nome_completo || 'Não informado'}\n📞 *WhatsApp:* ${zapCliente}\n💳 *Valor Total:* ${valorFormatado}\n📱 *Status do Pagto:* ${statusPagamento}\n\n🛍️ *Itens Comprados:*${itensComprados}`;
+                        const msgLojista = `🔔 *NOVO PEDIDO RECEBIDO!* 🔔\n\nOlá, equipe da *${nomeDaLoja}*!\nVocês acabam de receber um novo pedido.\n\n📦 *Pedido:* #${idPedidoReal}\n👤 *Cliente:* ${usuario.nome_completo || 'Não informado'}\n📞 *WhatsApp:* ${zapCliente}\n💳 *Valor Total:* ${valorFormatado}\n📱 *Status do Pagto:* ${statusPagamento}\n\n🛍️ *Itens Comprados:*${itensComprados}`;
 
                         await sendWhatsAppMessage(telefoneLimpoLojista, { text: msgLojista }, 1);
                     }
                 }
-            } catch (err) {}
+            } catch (err) { }
         }
 
         await CarrinhoModel.clear(id_usuario, id_tenant);
@@ -462,15 +614,14 @@ export const criarPedido = async (req, res, next) => {
                 if (autoPrintTermica === 'true') {
                     const impPadrao = await prisma.impressoras.findFirst({ where: { id_tenant, is_padrao: true, ativo: true } });
                     if (impPadrao) {
-                        // 🟢 IMPRESSÃO TÉRMICA: ENVIANDO EXTRAS PARA O WEBSOCKET
                         const printJob = {
                             tipo: 'CONTA', mesa: `Delivery #${idReal}`, impressora: impPadrao, total: preco_total_final,
                             itens: carrinhoItens.map(i => {
                                 let comps = [];
-                                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch(e){}
-                                return { 
-                                    nome: i.produtos.nome, 
-                                    quantidade: i.quantidade, 
+                                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch (e) { }
+                                return {
+                                    nome: i.produtos.nome,
+                                    quantidade: i.quantidade,
                                     preco: (parseFloat(i.produtos.preco || 0) + parseFloat(i.variacao?.preco_adicional || 0)).toString(),
                                     cor: i.variacao?.cor || i.cor,
                                     tamanho: i.variacao?.tamanho || i.tamanho,
@@ -483,7 +634,7 @@ export const criarPedido = async (req, res, next) => {
                     }
                 }
             }
-        } catch (printErr) {}
+        } catch (printErr) { }
 
         const paymentInfoResponse = {
             transaction_amount: preco_total_final, id_pagamento: resultadoPagamento.id, status: statusPagamento,
@@ -509,7 +660,7 @@ export const getPedidoById = async (req, res, next) => {
         const is_admin_logado = req.user.isAdmin;
         const id_tenant = req.tenantId;
 
-        let temPermissaoDeStaff = is_admin_logado; 
+        let temPermissaoDeStaff = is_admin_logado;
 
         if (!temPermissaoDeStaff) {
             const userPerms = req.user.permissoes || [];
@@ -554,7 +705,7 @@ export const getMeusPedidos = async (req, res, next) => {
             where: { id_usuario: id_usuario, id_tenant: id_tenant },
             orderBy: { data_pedido: 'desc' },
             include: {
-                pedido_items: true, 
+                pedido_items: true,
                 enderecos: true,
                 usuarios: { select: { nome_completo: true, email: true, telefone_criptografado: true, cpf_criptografado: true } }
             }
@@ -586,12 +737,11 @@ export const getMeusPedidos = async (req, res, next) => {
                 metodo_pagamento: p.metodo_pagamento || 'Não informado', gateway_provider: p.gateway_provider || 'Padrão',
                 endereco_entrega: enderecoStr,
                 cliente: { nome: p.usuarios?.nome_completo || 'Cliente', email: p.usuarios?.email || 'Sem email', telefone: telefoneReal, cpf: cpfReal },
-                
-                // 🟢 INCLUINDO DADOS DE VARIAÇÕES E COMPLEMENTOS NA RESPOSTA DE HISTÓRICO
+
                 itens: p.pedido_items.map(item => ({
                     id_item: item.id_pedido_item || item.id_produto || Math.floor(Math.random() * 1000),
                     nome_produto: item.nome_produto || item.nome || 'Produto do Pedido',
-                    quantidade: Number(item.quantidade || 1), 
+                    quantidade: Number(item.quantidade || 1),
                     preco_unitario: Number(item.preco_unitario || item.preco || 0),
                     imagem_url: item.imagem_url || item.imagem || null,
                     complementos: item.complementos || '[]',
@@ -853,17 +1003,16 @@ export const gerarPdfA4 = async (req, res, next) => {
 
         let itensHtml = '';
         pedido.pedido_items.forEach(item => {
-            // 🟢 PDF DO ADMIN: RENDERIZANDO OS COMPLEMENTOS
             let extrasHtml = '';
             if (item.cor) extrasHtml += `<br><small style="color:#555;">Cor: ${item.cor}</small>`;
             if (item.tamanho) extrasHtml += `<br><small style="color:#555;">Tamanho: ${item.tamanho}</small>`;
-            
+
             try {
                 const comps = typeof item.complementos === 'string' ? JSON.parse(item.complementos) : (item.complementos || []);
                 comps.forEach(c => {
                     extrasHtml += `<br><small style="color:#555;">+ ${c.quantidade}x ${c.nome || c.produto_add?.nome}</small>`;
                 });
-            } catch(e) {}
+            } catch (e) { }
 
             if (item.observacao) extrasHtml += `<br><small style="color:#e74c3c; font-weight:bold;">Obs: ${item.observacao}</small>`;
 
@@ -893,15 +1042,14 @@ export const imprimirTermicaCaixa = async (req, res, next) => {
         const impPadrao = await prisma.impressoras.findFirst({ where: { id_tenant, is_padrao: true, ativo: true } });
         if (!impPadrao) return res.status(400).json({ message: "Nenhuma impressora padrão configurada na loja." });
 
-        // 🟢 IMPRESSÃO TÉRMICA MANUAL: ENVIANDO DADOS COMPLETOS PARA SOCKET
         const printJob = {
             tipo: 'CONTA', mesa: `E-commerce / Delivery`, impressora: impPadrao, total: pedido.preco_total,
             itens: pedido.pedido_items.map(i => {
                 let comps = [];
-                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch(e){}
+                try { comps = typeof i.complementos === 'string' ? JSON.parse(i.complementos) : (i.complementos || []) } catch (e) { }
                 return {
-                    nome: i.nome_produto || i.nome, 
-                    quantidade: i.quantidade, 
+                    nome: i.nome_produto || i.nome,
+                    quantidade: i.quantidade,
                     preco: i.preco_unitario || i.preco,
                     cor: i.cor,
                     tamanho: i.tamanho,
@@ -926,7 +1074,7 @@ export const getCarrinho = async (req, res) => {
         const carrinhoItens = await CarrinhoModel.findByUserId(id_usuario, req.tenantId);
 
         if (!carrinhoItens || carrinhoItens.length === 0) {
-            return res.status(200).json([]); // Retorna array vazio em vez de erro 400
+            return res.status(200).json([]);
         }
 
         const carrinhoFormatado = [];
@@ -943,16 +1091,15 @@ export const getCarrinho = async (req, res) => {
             carrinhoFormatado.push({
                 id_produto: item.produtos.id_produto,
                 nome: item.produtos.nome,
-                preco: variacaoObj && variacaoObj.preco_adicional > 0 
-                       ? Number(item.produtos.preco) + Number(variacaoObj.preco_adicional) 
-                       : item.produtos.preco,
+                preco: variacaoObj && variacaoObj.preco_adicional > 0
+                    ? Number(item.produtos.preco) + Number(variacaoObj.preco_adicional)
+                    : item.produtos.preco,
                 imagem_url: variacaoObj?.imagem_url || item.produtos.imagem_url,
                 quantidade: parseFloat(item.quantidade),
                 unidade: item.produtos.unidade,
                 id_variacao: variacaoObj ? variacaoObj.id_variacao : null,
                 cor: variacaoObj ? variacaoObj.cor : null,
                 tamanho: variacaoObj ? variacaoObj.tamanho : null,
-                // 🟢 RETORNANDO NOVOS CAMPOS PARA O FRONTEND
                 complementos: item.complementos ? (typeof item.complementos === 'string' ? JSON.parse(item.complementos) : item.complementos) : [],
                 observacao: item.observacao || ''
             });
@@ -967,14 +1114,12 @@ export const getCarrinho = async (req, res) => {
 export const addAoCarrinho = async (req, res) => {
     try {
         const id_usuario = req.user.id_usuario;
-        // 🟢 RECEBENDO NOVOS CAMPOS DO FRONT
         const { id_produto, quantidade, id_variacao, complementos, observacao } = req.body;
 
         if (!id_produto || !quantidade || Number(quantidade) <= 0) {
             return res.status(400).json({ message: "ID do produto e quantidade válida são obrigatórios." });
         }
 
-        // 🟢 ENVIANDO PARA O CarrinhoModel. O Model precisará estar preparado para aceitá-los na Query do Prisma
         await CarrinhoModel.addOrUpdate(id_usuario, id_produto, quantidade, req.tenantId, id_variacao, complementos, observacao);
         res.status(201).json({ message: "Produto adicionado ao carrinho com sucesso!" });
     } catch (error) {

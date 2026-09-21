@@ -1030,6 +1030,7 @@ model tenants {
   produto_grupos_complemento produto_grupos_complemento[]
   agendamentos_servicos agendamentos_servicos[]
   controle_modulos controle_modulos[]
+  whazing_configuracoes whazing_configuracoes?
   
   // 🟢 RELAÇÕES DO WHATSAPP
   whatsapp_contatos      WhatsappContatos[]
@@ -1507,4 +1508,27 @@ model controle_modulos {
   // Garante que não teremos registros duplicados do mesmo módulo para o mesmo tenant
   @@unique([modulo, id_tenant], map: "uk_modulo_tenant")
   @@index([id_tenant], map: "idx_controle_modulos_tenant")
+}
+
+model whazing_configuracoes {
+  id_config           Int      @id @default(autoincrement())
+  id_tenant           Int      @unique
+  
+  // Credenciais
+  base_url            String?  @default("https://core.azun.com.br/v1/api/external") @db.VarChar(255)
+  api_id              String?  @db.VarChar(255)
+  token               String?  @db.Text
+  whazing_tenant_id   String?  @default("1") @db.VarChar(50)
+  
+  // Mapeamento do Funil
+  board_pedidos_id    String?  @db.VarChar(50)
+  col_pendente_id     String?  @db.VarChar(50)
+  col_pago_id         String?  @db.VarChar(50)
+  col_recusado_id     String?  @db.VarChar(50)
+  
+  atualizado_em       DateTime @updatedAt @default(now())
+
+  tenants             tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+
+  @@index([id_tenant], map: "idx_kanban_config_tenant")
 }

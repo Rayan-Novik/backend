@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import generateToken from '../../utils/generateToken.js';
 import { encrypt, decrypt } from '../../services/cryptoService.js';
+import whazingDbService from '../../services/whatsapp/Whazing/whazingDbService.js';
 
 const prisma = new PrismaClient();
 
@@ -93,8 +94,7 @@ export const getAllFuncionarios = async (req, res, next) => {
 // ==========================================
 export const registrarFuncionario = async (req, res, next) => {
     try {
-        // 🟢 Recebendo o id_cargo do body
-        const { nome_completo, email, senha, role, isAdmin, codigo_acesso, cpf, ativo, id_cargo } = req.body;
+        const { nome_completo, email, senha, role, isAdmin, codigo_acesso, cpf, ativo, id_cargo, sync_whazing, senha_whazing } = req.body;
         const id_tenant = req.tenantId;
 
         const emailExiste = await prisma.funcionarios.findFirst({
@@ -130,13 +130,22 @@ export const registrarFuncionario = async (req, res, next) => {
                 email,
                 hash_senha,
                 role: role,
-                id_cargo: id_cargo || null, // 🟢 Salvando a ligação com a tabela cargos
+                id_cargo: id_cargo || null, 
                 isAdmin: isAdmin || false,
                 codigo_acesso: codigo_acesso || null,
                 cpf_criptografado: cpfCriptografado,
                 ativo: ativo !== undefined ? ativo : true
             }
         });
+
+        // 🟢 INTEGRAÇÃO WHAZING: Sincroniza se o usuário pediu!
+        if (sync_whazing) {
+            try {
+                await whazingDbService.syncWhazingUser(id_tenant, nome_completo, email, senha_whazing || senha, role);
+            } catch (syncErr) {
+                console.error("Aviso: Falha ao sincronizar com Whazing, mas o usuário do ERP foi criado.");
+            }
+        }
 
         res.status(201).json({
             id_funcionario: novoFuncionario.id_funcionario,
@@ -157,8 +166,7 @@ export const updateFuncionario = async (req, res, next) => {
     try {
         const { id } = req.params;
         const id_tenant = req.tenantId;
-        // 🟢 Recebendo o id_cargo do body
-        const { nome_completo, email, role, isAdmin, senha, codigo_acesso, ativo, id_cargo } = req.body;
+        const { nome_completo, email, role, isAdmin, senha, codigo_acesso, ativo, id_cargo, sync_whazing, senha_whazing } = req.body;
 
         const funcionarioAtual = await prisma.funcionarios.findFirst({
             where: { id_funcionario: Number(id), id_tenant: id_tenant }
@@ -172,7 +180,7 @@ export const updateFuncionario = async (req, res, next) => {
             nome_completo: nome_completo || funcionarioAtual.nome_completo,
             email: email || funcionarioAtual.email,
             role: role || funcionarioAtual.role,
-            id_cargo: id_cargo !== undefined ? id_cargo : funcionarioAtual.id_cargo, // 🟢 Salvando na edição
+            id_cargo: id_cargo !== undefined ? id_cargo : funcionarioAtual.id_cargo,
             isAdmin: isAdmin !== undefined ? isAdmin : funcionarioAtual.isAdmin,
             ativo: ativo !== undefined ? ativo : funcionarioAtual.ativo,
             codigo_acesso: codigo_acesso !== undefined ? codigo_acesso : funcionarioAtual.codigo_acesso
@@ -187,6 +195,16 @@ export const updateFuncionario = async (req, res, next) => {
             where: { id_funcionario: Number(id) },
             data: dadosParaAtualizar
         });
+
+        // 🟢 INTEGRAÇÃO WHAZING: Sincroniza se o usuário pediu!
+        if (sync_whazing) {
+            try {
+                // Passa a senha_whazing (se houver alteração) ou envia nulo (para apenas atualizar nome/cargo)
+                await whazingDbService.syncWhazingUser(id_tenant, dadosParaAtualizar.nome_completo, dadosParaAtualizar.email, senha_whazing, dadosParaAtualizar.role);
+            } catch (syncErr) {
+                console.error("Aviso: Falha ao sincronizar com Whazing, mas o usuário do ERP foi atualizado.");
+            }
+        }
 
         res.json({
             id_funcionario: updatedFuncionario.id_funcionario,
