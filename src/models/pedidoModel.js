@@ -304,7 +304,8 @@ export default {
             include: {
                 enderecos: true,
                 usuarios: true,
-                pedido_items: true // Apenas busque os itens, o nome já virá concatenado conforme o passo anterior
+                pedido_items: true, // Apenas busque os itens, o nome já virá concatenado conforme o passo anterior
+                nota_fiscal: true
             }
         });
 
@@ -313,6 +314,7 @@ export default {
         return {
             ...pedidoCompleto,
             pedido: pedidoCompleto,
+            nota_fiscal: pedidoCompleto.nota_fiscal || null,
             cliente: pedidoCompleto.usuarios,
             endereco: pedidoCompleto.enderecos || {
                 logradouro: pedidoCompleto.entrega_logradouro,

@@ -1,0 +1,25 @@
+{
+    "name": "modulo-fiscal/nfe-adapter",
+    "description": "NFe Adapter for Node.js using local NFePHP",
+    "type": "project",
+    "require": {
+        "php": ">=7.4",
+        "nfephp-org/sped-nfe": "*"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../../sped-nfe-master",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Adapter\\": "src/"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

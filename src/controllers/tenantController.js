@@ -50,6 +50,7 @@ export const registerTenant = async (req, res, next) => {
         const diasTeste = planoDB ? planoDB.dias_teste : 7;
         const limiteProdutos = planoDB ? planoDB.limite_produtos : 50;
         const limiteUsuarios = planoDB ? planoDB.limite_usuarios : 2;
+        const limiteCaixas = planoDB ? (planoDB.limite_caixas || 1) : 1;
 
         const data_vencimento = new Date();
         data_vencimento.setDate(data_vencimento.getDate() + diasTeste);
@@ -71,7 +72,8 @@ export const registerTenant = async (req, res, next) => {
                 status_assinatura: statusInicial,
                 data_vencimento: data_vencimento,
                 limite_produtos: limiteProdutos,  
-                limite_usuarios: limiteUsuarios,   
+                limite_usuarios: limiteUsuarios,
+                limite_caixas: limiteCaixas,   
                 ativo: true,
                 role: 'PROPRIETÁRIO' // 🟢 Força o status de Dono Universal
             }
@@ -269,7 +271,7 @@ export const createPlano = async (req, res) => {
     if (req.tenantId !== 1) return res.status(403).json({ message: 'Acesso negado.' });
     
     try {
-        const { nome, preco_mensal, dias_teste, limite_produtos, limite_usuarios, destaque, ativo, descricao } = req.body;
+        const { nome, preco_mensal, dias_teste, limite_produtos, limite_usuarios, limite_caixas, destaque, ativo, descricao } = req.body;
 
         const novoPlano = await prisma.planos.create({
             data: {
@@ -278,6 +280,7 @@ export const createPlano = async (req, res) => {
                 dias_teste: dias_teste ? parseInt(dias_teste, 10) : 7, 
                 limite_produtos: limite_produtos ? parseInt(limite_produtos, 10) : 100, 
                 limite_usuarios: limite_usuarios ? parseInt(limite_usuarios, 10) : 1, 
+                limite_caixas: limite_caixas ? parseInt(limite_caixas, 10) : 1,
                 destaque: String(destaque) === 'true' || destaque === true,
                 ativo: String(ativo) === 'true' || ativo === true,
                 descricao: descricao || ""
@@ -296,7 +299,7 @@ export const updatePlano = async (req, res) => {
 
     try {
         const id = parseInt(req.params.id, 10);
-        const { nome, preco_mensal, dias_teste, limite_produtos, limite_usuarios, destaque, ativo, descricao } = req.body;
+        const { nome, preco_mensal, dias_teste, limite_produtos, limite_usuarios, limite_caixas, destaque, ativo, descricao } = req.body;
 
         // 1. Pega os dados antigos do plano ANTES de atualizar
         const planoAntigo = await prisma.planos.findUnique({ where: { id } });
@@ -311,6 +314,7 @@ export const updatePlano = async (req, res) => {
         if (dias_teste !== undefined) dadosAtualizados.dias_teste = parseInt(dias_teste, 10);
         if (limite_produtos !== undefined) dadosAtualizados.limite_produtos = parseInt(limite_produtos, 10);
         if (limite_usuarios !== undefined) dadosAtualizados.limite_usuarios = parseInt(limite_usuarios, 10);
+        if (limite_caixas !== undefined) dadosAtualizados.limite_caixas = parseInt(limite_caixas, 10);
         if (destaque !== undefined) dadosAtualizados.destaque = String(destaque) === 'true' || destaque === true;
         if (ativo !== undefined) dadosAtualizados.ativo = String(ativo) === 'true' || ativo === true;
         if (descricao !== undefined) dadosAtualizados.descricao = descricao;
@@ -320,6 +324,14 @@ export const updatePlano = async (req, res) => {
             where: { id },
             data: dadosAtualizados
         });
+
+        // Atualiza limite de caixas nas lojas com esse plano se especificado
+        if (limite_caixas !== undefined && planoAntigo.nome) {
+            await prisma.tenants.updateMany({
+                where: { plano: planoAntigo.nome },
+                data: { limite_caixas: parseInt(limite_caixas, 10) }
+            }).catch(() => null);
+        }
         
         // 3. 🟢 EFEITO CASCATA: Se o NOME do plano mudou, atualiza todas as lojas vinculadas!
         if (nome && nome !== planoAntigo.nome) {

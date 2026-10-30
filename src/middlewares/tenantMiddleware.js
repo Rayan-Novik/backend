@@ -63,6 +63,29 @@ export const tenantResolver = async (req, res, next) => {
             }
         }
 
+        // 🔹 PRIORIDADE 5: Busca pelo Token do Caixa PDV / Dispositivo
+        let tokenCaixa = req.query?.token || req.body?.token || req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'];
+        if (!tokenCaixa && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+            const rawToken = req.headers.authorization.split(' ')[1];
+            if (rawToken && (rawToken.startsWith('CX-') || rawToken.length < 50)) {
+                tokenCaixa = rawToken;
+            }
+        }
+        if (!tenant && tokenCaixa) {
+            try {
+                const caixaFound = await prisma.pdv_caixas.findFirst({
+                    where: { token_conexao: String(tokenCaixa) }
+                });
+                if (caixaFound && caixaFound.tenant_id) {
+                    tenant = await prisma.tenants.findUnique({
+                        where: { id: Number(caixaFound.tenant_id) }
+                    });
+                }
+            } catch (err) {
+                // Silencioso
+            }
+        }
+
         // =========================================================
         // 🛑 A BARREIRA DE SEGURANÇA (Adeus vazamento de dados!)
         // =========================================================
@@ -82,7 +105,22 @@ export const tenantResolver = async (req, res, next) => {
             '/kanban',            // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
             '/apikeys',           // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
             '/whazing-config',    // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
-            '/integracao'         // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+            '/integracao',        // 🟢 LIBERADO (O JWT FAZ A SEGURANÇA)
+            '/api/pdv/health',
+            '/caixas/carga-sync',
+            '/api/pdv/caixas/carga-sync',
+            '/caixas/vincular',
+            '/api/pdv/caixas/vincular',
+            '/caixas/mesas',
+            '/api/pdv/caixas/mesas',
+            '/caixas/disparar-carga',
+            '/api/pdv/caixas/disparar-carga',
+            '/api/sync/movimento',
+            '/sync/movimento',
+            '/api/sync/catalogo',
+            '/sync/catalogo',
+            '/fiscal',
+            '/tabelas-fiscais'
         ];
         
         const isPublicRoute = rotasLivres.some(rota => req.originalUrl.includes(rota));

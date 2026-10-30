@@ -27,6 +27,7 @@ import { connectWhatsApp, restoreWhatsAppSessions } from './services/whatsapp/co
 import { initMPRefreshCron, initIfoodPollingCron } from './services/cronManager.js'; // 🟢 CRON DO IFOOD ADICIONADO AQUI
 
 import { PrismaClient } from '@prisma/client';
+import { obterCargaSyncCaixa, processarEmissaoFiscalVendaPDV } from './controllers/vendaslocais/pdvController.js';
 const prisma = new PrismaClient();
 
 dotenv.config();
@@ -95,6 +96,14 @@ app.use(helmet({
 app.use(corsMiddleware);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Captura requisições com JSON malformado e evita logar exceções de sintaxe
+app.use((err, req, res, next) => {
+    if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+        return res.status(400).json({ success: false, error: "JSON inválido na requisição." });
+    }
+    next(err);
+});
 
 // =========================================================
 // 🛡️ REGRAS DE BLOQUEIO (RATE LIMIT)
@@ -270,6 +279,248 @@ app.use((req, res, next) => {
     }
     next();
 });
+
+// 🩺 Health Check direto do PDV Desktop
+app.all('/api/pdv/health', (req, res) => res.json({ status: 'OK', online: true, timestamp: new Date().toISOString() }));
+
+// 📦 Recebimento de Vendas e Movimentações Offline do PDV Desktop
+app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
+    try {
+        const token = req.query.token || req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'] || req.headers['authorization']?.replace('Bearer ', '');
+        const lote = Array.isArray(req.body) ? req.body : (req.body?.lote || []);
+        console.log(`[SYNC DESKTOP] Recebidas ${lote.length} movimentações offline do PDV (Token: ${token || 'N/A'}).`);
+
+        let caixa = null;
+        if (token) {
+            caixa = await prisma.pdv_caixas.findFirst({
+                where: { token_conexao: String(token) }
+            });
+            if (caixa && !caixa.hardware_id) {
+                const hwid = req.headers['x-hwid'] || req.query.hwid || 'PAREADO';
+                const comp = req.headers['x-computador'] || req.query.computador;
+                const hwidStr = comp ? `${hwid} (${comp})` : String(hwid);
+                await prisma.pdv_caixas.update({
+                    where: { id: caixa.id },
+                    data: { hardware_id: hwidStr, updated_at: new Date() }
+                });
+            }
+        }
+
+        const id_tenant = req.tenantId || (caixa ? Number(caixa.tenant_id) : 1);
+
+        // Busca ou cria o consumidor padrão para o tenant
+        const emailPadrao = `consumidor_${id_tenant}@pdv.padrao`;
+        let consumidorPadrao = await prisma.usuarios.findFirst({
+            where: { email: emailPadrao, id_tenant }
+        });
+        if (!consumidorPadrao) {
+            consumidorPadrao = await prisma.usuarios.create({
+                data: {
+                    nome_completo: 'Consumidor Final',
+                    email: emailPadrao,
+                    hash_senha: 'pdv_password_safe',
+                    id_tenant
+                }
+            });
+        }
+
+        // Busca ou abre uma sessão de caixa_pdv para registrar o saldo
+        let caixaAberto = await prisma.caixa_pdv.findFirst({
+            where: { id_tenant, status: 'ABERTO' },
+            orderBy: { data_abertura: 'desc' }
+        });
+
+        const processados = [];
+
+        for (const item of lote) {
+            try {
+                if (item.entidade === 'VENDA') {
+                    let venda = item.payload;
+                    if (typeof venda === 'string') {
+                        try {
+                            venda = JSON.parse(venda);
+                        } catch (e) {
+                            venda = JSON.parse(venda.replace(/\\"/g, '"'));
+                        }
+                    }
+
+                    if (!venda || !venda.itens) {
+                        processados.push(item.id);
+                        continue;
+                    }
+
+                    const totalLiquido = Number(venda.valor_total || 0);
+
+                    // Cria o pedido no MySQL
+                    const novoPedido = await prisma.pedidos.create({
+                        data: {
+                            id_tenant: id_tenant,
+                            id_usuario: consumidorPadrao.id_usuario,
+                            id_caixa_pdv: caixaAberto ? caixaAberto.id_caixa : null,
+                            preco_itens: totalLiquido,
+                            preco_frete: 0,
+                            preco_total: totalLiquido,
+                            metodo_pagamento: venda.descricao_pagamento || 'DINHEIRO',
+                            status_pagamento: 'PAGO',
+                            status_entrega: 'Entregue',
+                            canal_venda: 'PDV',
+                            origem_criacao: 'DESKTOP',
+                            sincronizado_cloud: true,
+                            data_pedido: new Date(venda.data_hora || Date.now()),
+                            pedido_items: {
+                                create: (venda.itens || []).map(it => ({
+                                    id_produto: it.id && !isNaN(Number(it.id)) ? Number(it.id) : null,
+                                    nome: it.nome || 'Produto',
+                                    quantidade: Number(it.quantidade || 1),
+                                    preco: Number(it.preco || 0),
+                                    id_tenant: id_tenant
+                                }))
+                            }
+                        }
+                    });
+
+                    // Dá baixa no estoque de cada produto vendido
+                    for (const it of (venda.itens || [])) {
+                        if (it.id && !isNaN(Number(it.id))) {
+                            await prisma.produtos.updateMany({
+                                where: { id_produto: Number(it.id), id_tenant },
+                                data: { estoque: { decrement: Number(it.quantidade || 1) } }
+                            }).catch(() => {});
+                        }
+                    }
+
+                    // Incrementa saldo do caixa aberto se houver
+                    if (caixaAberto) {
+                        await prisma.caixa_pdv.update({
+                            where: { id_caixa: caixaAberto.id_caixa },
+                            data: { saldo_sistema: { increment: totalLiquido } }
+                        }).catch(() => {});
+                    }
+
+                    // 🧾 Emissão Fiscal Automática (NFC-e) para SEFAZ e registro na tabela fiscal_notas (Notas de Saída)
+                    if (venda.modo_fiscal !== 'NAO_FISCAL') {
+                        try {
+                            const itensParaFiscal = (venda.itens || []).map(it => ({
+                                id_produto: it.id && !isNaN(Number(it.id)) ? Number(it.id) : null,
+                                quantidade: Number(it.quantidade || 1),
+                                preco: Number(it.preco || 0)
+                            }));
+
+                            await processarEmissaoFiscalVendaPDV({
+                                id_tenant,
+                                pedido: novoPedido,
+                                itensParaSalvar: itensParaFiscal,
+                                metodo_pagamento: venda.descricao_pagamento || novoPedido.metodo_pagamento || 'DINHEIRO',
+                                caixa_id: caixa ? caixa.id : null,
+                                cpf_cnpj_nota: venda.cpf_nota || null,
+                                tipo_documento_fiscal: 'NFCE',
+                                descontoVenda: 0
+                            });
+                            console.log(`[SYNC DESKTOP] 📜 NFC-e gerada e vinculada com sucesso ao Pedido ID: ${novoPedido.id_pedido} na tabela fiscal_notas.`);
+                        } catch (fiscErr) {
+                            console.warn(`[SYNC DESKTOP] ⚠️ Venda ${novoPedido.id_pedido} salva no banco, mas aviso fiscal:`, fiscErr.message);
+                        }
+                    }
+
+                    console.log(`[SYNC DESKTOP] ✅ Venda ${item.registro_id} inserida no MySQL com sucesso! Pedido ID: ${novoPedido.id_pedido}, Total: R$ ${totalLiquido}`);
+                    processados.push(item.id);
+                } else if (item.entidade === 'TURNO_ABERTURA') {
+                    let turnoData = item.payload;
+                    if (typeof turnoData === 'string') {
+                        try { turnoData = JSON.parse(turnoData); } catch (e) { turnoData = JSON.parse(turnoData.replace(/\\"/g, '"')); }
+                    }
+                    const saldoIni = Number(turnoData?.saldo_inicial || 0);
+                    let opId = Number(turnoData?.operador_id);
+                    if (isNaN(opId) || opId <= 0) {
+                        const func = await prisma.funcionarios.findFirst({ where: { id_tenant, ativo: true } });
+                        opId = func ? func.id_funcionario : consumidorPadrao.id_usuario;
+                    } else {
+                        // Verifica se o funcionário existe para respeitar a chave estrangeira
+                        const funcExiste = await prisma.funcionarios.findFirst({ where: { id_funcionario: opId, id_tenant } });
+                        if (!funcExiste) {
+                            const funcPadrao = await prisma.funcionarios.findFirst({ where: { id_tenant, ativo: true } });
+                            opId = funcPadrao ? funcPadrao.id_funcionario : opId;
+                        }
+                    }
+
+                    // Verifica se já existe um caixa aberto para esse tenant
+                    let caixaJaAberto = await prisma.caixa_pdv.findFirst({
+                        where: { id_tenant, status: 'ABERTO' },
+                        orderBy: { data_abertura: 'desc' }
+                    });
+
+                    if (!caixaJaAberto) {
+                        caixaJaAberto = await prisma.caixa_pdv.create({
+                            data: {
+                                id_tenant,
+                                id_usuario: opId,
+                                saldo_inicial: saldoIni,
+                                saldo_sistema: saldoIni,
+                                status: 'ABERTO',
+                                data_abertura: new Date(turnoData?.data_abertura || Date.now())
+                            }
+                        });
+                        console.log(`[SYNC DESKTOP] 🔓 Turno aberto registrado no MySQL! Caixa ID: ${caixaJaAberto.id_caixa}, Saldo: R$ ${saldoIni}`);
+                    } else {
+                        console.log(`[SYNC DESKTOP] ℹ️ Caixa já se encontra ABERTO no MySQL (ID: ${caixaJaAberto.id_caixa}). Mantendo turno ativo.`);
+                    }
+                    processados.push(item.id);
+                } else if (item.entidade === 'TURNO_FECHAMENTO') {
+                    let fechData = item.payload;
+                    if (typeof fechData === 'string') {
+                        try { fechData = JSON.parse(fechData); } catch (e) { fechData = JSON.parse(fechData.replace(/\\"/g, '"')); }
+                    }
+                    const saldoFim = Number(fechData?.saldo_final || 0);
+                    
+                    // Fecha todos os caixas abertos do tenant com saldo_final correto
+                    const fechados = await prisma.caixa_pdv.updateMany({
+                        where: { id_tenant, status: 'ABERTO' },
+                        data: {
+                            status: 'FECHADO',
+                            saldo_final: saldoFim,
+                            data_fechamento: new Date()
+                        }
+                    });
+                    console.log(`[SYNC DESKTOP] 🔒 Turno(s) fechado(s) no MySQL! (${fechados.count} caixas atualizados com status FECHADO, Saldo Final: R$ ${saldoFim})`);
+                    processados.push(item.id);
+                } else if (item.entidade === 'SANGRIA' || item.entidade === 'SUPRIMENTO') {
+                    let movData = item.payload;
+                    if (typeof movData === 'string') {
+                        try { movData = JSON.parse(movData); } catch (e) { movData = JSON.parse(movData.replace(/\\"/g, '"')); }
+                    }
+                    const val = Number(movData?.valor || 0);
+                    const delta = item.entidade === 'SUPRIMENTO' ? val : -val;
+                    if (caixaAberto) {
+                        await prisma.caixa_pdv.update({
+                            where: { id_caixa: caixaAberto.id_caixa },
+                            data: { saldo_sistema: { increment: delta } }
+                        }).catch(() => {});
+                    }
+                    console.log(`[SYNC DESKTOP] 💵 ${item.entidade} de R$ ${val} registrada no caixa aberto.`);
+                    processados.push(item.id);
+                } else {
+                    processados.push(item.id);
+                }
+            } catch (itemErr) {
+                console.error(`[SYNC ITEM ERROR] Falha no item ${item.id}:`, itemErr);
+                processados.push(item.id);
+            }
+        }
+
+        return res.json({
+            success: true,
+            message: `Lote de ${processados.length} movimentações sincronizado com sucesso no MySQL!`,
+            total_processados: processados.length,
+            ids_confirmados: processados
+        });
+    } catch (err) {
+        console.error("[SYNC DESKTOP ERROR]:", err);
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 📦 Carga de Catálogo para o PDV Desktop
+app.all(['/api/sync/catalogo', '/sync/catalogo'], obterCargaSyncCaixa);
 
 // =========================================================
 // ✅ ROTAS PRINCIPAIS SAAS (Painel e Loja Virtual)

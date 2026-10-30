@@ -40,6 +40,7 @@
     "mysql2": "^3.14.3",
     "node-cron": "^4.2.1",
     "node-forge": "^1.4.0",
+    "node-sped-pdf": "^1.0.66",
     "nodemailer": "^7.0.6",
     "openai": "^6.44.0",
     "pdf-parse": "^2.4.5",
@@ -55,7 +56,8 @@
     "socket.io": "^4.8.1",
     "stripe": "^20.1.2",
     "tedious": "^18.6.1",
-    "xml-crypto": "^6.1.2"
+    "xml-crypto": "^6.1.2",
+    "xmlbuilder2": "^4.0.3"
   },
   "devDependencies": {
     "prisma": "^6.19.2"

@@ -45,11 +45,11 @@ import sitemapRoutes from './sitemapRoutes.js';
 import { renderOgTags } from '../controllers/ogController.js';
 import cargoRoutes from './cargoRoutes.js';
 import ifoodRoutes from './ifoodRoutes.js';
-import publicApiRoutes from './apiKeysRoutes.js';
+import publicApiRoutes from './publicApiRoutes.js';
 import publicIntegrationRoutes from './publicIntegrationRoutes.js';
 import agendamentoRoutes from './agendamentoRoutes.js';
 import modulosRoutes from './modulosRoutes.js';
-import kanbanRoutes from './kanbanRoutes.js';
+import WhazingRoutes from './WhazingRoutes.js';
 // 🟢 NOVOS IMPORTS: Comandas e Mesas
 import comandaRoutes from './comandaRoutes.js';
 import autoatendimentoRoutes from './autoatendimentoRoutes.js';
@@ -60,6 +60,7 @@ import whazingConfigRoutes from './whazingConfigRoutes.js';
 import impressoraRoutes from './impressoraRoutes.js';
 
 import fiscalRoutes from './fiscalRoutes.js';
+import tabelasFiscaisRoutes from './tabelasFiscaisRoutes.js';
 
 const router = express.Router();
 
@@ -115,6 +116,7 @@ router.use('/mesas', mesasRoutes);
 router.use('/autoatendimento', autoatendimentoRoutes);
 router.use('/impressoras', impressoraRoutes);
 router.use('/fiscal', fiscalRoutes);
+router.use('/tabelas-fiscais', tabelasFiscaisRoutes);
 
 router.get('/public-keys', getPaymentConfig);
 router.use('/whatsapp', whatsappRoutes);
@@ -124,7 +126,7 @@ router.use('/sitemap.xml', sitemapRoutes);
 router.use('/cargos', cargoRoutes);
 router.use('/ifood', ifoodRoutes);
 router.use('/agendamentos', agendamentoRoutes);
-router.use('/kanban', kanbanRoutes);
+router.use('/kanban', WhazingRoutes);
 
 // 🟢 ROTA DA CONFIGURAÇÃO DO WHAZING/KANBAN
 router.use('/whazing-config', whazingConfigRoutes);

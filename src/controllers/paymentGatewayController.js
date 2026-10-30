@@ -30,7 +30,8 @@ export const getActiveGatewaysForCheckout = async (req, res) => {
             select: {
                 method: true,
                 provider: true,
-                is_active: true
+                is_active: true,
+                fiscal_payment_id: true // 🟢 Agora retorna pro Checkout
             }
         });
 
@@ -68,21 +69,16 @@ export const updateRoutingRules = async (req, res) => {
         await prisma.$transaction(async (tx) => {
             for (const rule of rules) {
                 const existingRule = await tx.gateway_rules.findFirst({
-                    where: { 
-                        method: rule.method,
-                        id_tenant: req.tenantId 
-                    }
+                    where: { method: rule.method, id_tenant: req.tenantId }
                 });
 
                 if (existingRule) {
                     await tx.gateway_rules.updateMany({
-                        where: { 
-                            method: rule.method,
-                            id_tenant: req.tenantId 
-                        },
+                        where: { method: rule.method, id_tenant: req.tenantId },
                         data: { 
                             provider: rule.provider, 
-                            is_active: rule.is_active 
+                            is_active: rule.is_active,
+                            fiscal_payment_id: rule.fiscal_payment_id || null // 🟢 Salva a ligação fiscal
                         }
                     });
                 } else {
@@ -91,6 +87,7 @@ export const updateRoutingRules = async (req, res) => {
                             method: rule.method, 
                             provider: rule.provider, 
                             is_active: rule.is_active,
+                            fiscal_payment_id: rule.fiscal_payment_id || null, // 🟢 Salva a ligação fiscal
                             id_tenant: req.tenantId
                         }
                     });

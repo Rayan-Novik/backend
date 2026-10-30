@@ -1,5 +1,8 @@
 const errorHandler = (err, req, res, next) => {
-    console.error(err.stack); // Log do erro no console do servidor
+    console.error(`🚨 [Erro ${req.method} ${req.originalUrl}]:`, err.message);
+    if (!(err instanceof SyntaxError)) {
+        console.error(err.stack);
+    }
 
     const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
     res.status(statusCode);

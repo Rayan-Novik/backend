@@ -239,6 +239,16 @@ class KanbanController {
             return res.status(400).json({ error: error.message });
         }
     }
+
+    async listarTodosTickets(req, res) {
+        try {
+            const { searchParam, status } = req.query;
+            const data = await whazingCrmService.getAllTickets(req.tenantId, searchParam, status);
+            return res.status(200).json(data);
+        } catch (error) {
+            return res.status(400).json({ error: error.message });
+        }
+    }
 }
 
 export default new KanbanController();

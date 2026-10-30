@@ -173,6 +173,30 @@ class WhazingCrmService {
             throw new Error('Falha ao gerar QR Code do WhatsApp.');
         }
     }
+
+    async getAllTickets(tenantId, searchParam = '', status = 'open') {
+        try {
+            const { api, baseUrlRoot } = await this._getApi(tenantId);
+            console.log(`\n🔎 [WHAZING] Buscando tickets na URL: ${baseUrlRoot}/tickets | Status: ${status}`);
+            
+            const response = await api.get(`${baseUrlRoot}/tickets`, {
+                params: { 
+                    searchParam: searchParam || "",
+                    showAll: "true", 
+                    status: status   
+                }
+            });
+            
+            // Tenta ver quantos tickets vieram
+            const total = response.data?.tickets?.length || response.data?.length || 0;
+            console.log(`✅ [WHAZING] Sucesso! Encontrou ${total} tickets.`);
+            
+            return response.data;
+        } catch (error) {
+            console.error('\n❌ [WHAZING] ERRO AO BUSCAR TICKETS:', error.response?.data || error.message);
+            return [];
+        }
+    }
 }
 
 export default new WhazingCrmService();

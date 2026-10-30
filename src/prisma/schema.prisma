@@ -47,85 +47,100 @@ model enderecos {
 }
 
 model pedido_items {
-  id_item    Int      @id @default(autoincrement())
-  id_pedido  Int
-  id_produto Int?
-  id_variacao Int?
-  nome       String   @db.VarChar(255)
-  quantidade Decimal  @db.Decimal(10, 3)
-  preco      Decimal  @db.Decimal(10, 2)
-  imagem_url String?  @db.VarChar(2048)
-  id_tenant  Int      @default(1)
-  tenants    tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_pedido_items_tenant")
-  pedidos    pedidos  @relation(fields: [id_pedido], references: [id_pedido], onDelete: Cascade, onUpdate: NoAction, map: "pedido_items_fk_pedido")
+  id_item         Int      @id @default(autoincrement())
+  id_pedido       Int
+  id_produto      Int?
+  id_variacao     Int?
+  nome            String   @db.VarChar(255)
+  quantidade      Decimal  @db.Decimal(10, 3)
+  preco           Decimal  @db.Decimal(10, 2)
+  imagem_url      String?  @db.VarChar(2048)
+  id_tenant       Int      @default(1)
   nome_atendente  String?  @db.VarChar(255)
-  observacao String?  @db.Text
-  complementos Json?
+  observacao      String?  @db.Text
+  complementos    Json?
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud    Boolean   @default(false)
+  atualizado_em         DateTime  @default(now()) @updatedAt
+  deletado_em           DateTime?
+
+  tenants tenants @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_pedido_items_tenant")
+  pedidos pedidos @relation(fields: [id_pedido], references: [id_pedido], onDelete: Cascade, onUpdate: NoAction, map: "pedido_items_fk_pedido")
 
   @@index([id_pedido], map: "id_pedido")
   @@index([id_tenant], map: "fk_pedido_items_tenant")
+  @@index([sincronizado_cloud], map: "idx_sync_pedido_items")
 }
 
 model pedidos {
-  id_pedido             Int                      @id @default(autoincrement())
+  id_pedido             Int      @id @default(autoincrement())
   id_tenant             Int
   id_usuario            Int
   id_endereco_entrega   Int?
-  entrega_cep           String?                  @db.VarChar(10)
-  entrega_logradouro    String?                  @db.VarChar(255)
-  entrega_numero        String?                  @db.VarChar(20)
-  entrega_complemento   String?                  @db.VarChar(100)
-  entrega_bairro        String?                  @db.VarChar(100)
-  entrega_cidade        String?                  @db.VarChar(100)
-  entrega_estado        String?                  @db.VarChar(50)
-  metodo_pagamento      String                   @db.VarChar(50)
-  preco_itens           Decimal                  @db.Decimal(10, 2)
-  preco_frete           Decimal                  @db.Decimal(10, 2)
-  preco_total           Decimal                  @db.Decimal(10, 2)
-  status_pagamento      String?                  @default("PENDENTE") @db.VarChar(50)
-  id_pagamento_gateway  String?                  @db.VarChar(255)
-  data_pedido           DateTime                 @default(now()) @db.Timestamp(0)
-  status_entrega        String                   @default("Pendente") @db.VarChar(50)
-  metodo_envio          String?                  @db.VarChar(100)
-  prazo_entrega         String?                  @db.VarChar(50)
-  codigo_rastreio       String?                  @db.VarChar(255)
+  entrega_cep           String?  @db.VarChar(10)
+  entrega_logradouro    String?  @db.VarChar(255)
+  entrega_numero        String?  @db.VarChar(20)
+  entrega_complemento   String?  @db.VarChar(100)
+  entrega_bairro        String?  @db.VarChar(100)
+  entrega_cidade        String?  @db.VarChar(100)
+  entrega_estado        String?  @db.VarChar(50)
+  metodo_pagamento      String   @db.VarChar(50)
+  preco_itens           Decimal  @db.Decimal(10, 2)
+  preco_frete           Decimal  @db.Decimal(10, 2)
+  preco_total           Decimal  @db.Decimal(10, 2)
+  status_pagamento      String?  @default("PENDENTE") @db.VarChar(50)
+  id_pagamento_gateway  String?  @db.VarChar(255)
+  data_pedido           DateTime @default(now()) @db.Timestamp(0)
+  status_entrega        String   @default("Pendente") @db.VarChar(50)
+  metodo_envio          String?  @db.VarChar(100)
+  prazo_entrega         String?  @db.VarChar(50)
+  codigo_rastreio       String?  @db.VarChar(255)
   id_cupom_utilizado    Int?
-  canal_venda           String                   @default("ecommerce") @db.VarChar(50)
-  gateway_provider      String                   @default("MERCADOPAGO") @db.VarChar(50)
-  ifood_order_id        String?                  @unique(map: "ifood_order_id") @db.VarChar(255)
-  ifood_display_id      String?                  @db.VarChar(50)
+  canal_venda           String   @default("ecommerce") @db.VarChar(50)
+  gateway_provider      String   @default("MERCADOPAGO") @db.VarChar(50)
+  ifood_order_id        String?  @unique(map: "ifood_order_id") @db.VarChar(255)
+  ifood_display_id      String?  @db.VarChar(50)
   id_caixa_pdv          Int?
-  url_boleto            String?                  @db.Text
-  linha_digitavel       String?                  @db.VarChar(255)
-  delivery_pin          String?                  @db.VarChar(10)
-  driver_token          String?                  @unique @db.VarChar(255)
-  driver_token_expires  DateTime?                @db.DateTime(0)
+  url_boleto            String?  @db.Text
+  linha_digitavel       String?  @db.VarChar(255)
+  delivery_pin          String?  @db.VarChar(10)
+  driver_token          String?  @unique @db.VarChar(255)
+  driver_token_expires  DateTime? @db.DateTime(0)
   driver_lat            Float?
   driver_lng            Float?
-  id_mesa Int?
-  codigo_comanda        String?                  @db.VarChar(50) // Ex: "Mesa 04", "Ficha 42"
-  status_comanda        String?                  @default("ABERTA") @db.VarChar(20) // ABERTA, FECHADA, CANCELADA
-  nome_cliente_comanda  String?                 @db.VarChar(100) // Para chamar o cliente pelo nome, se for o caso
-  nome_atendente  String?  @db.VarChar(255)
-  nota_fiscal           notas_fiscais?
+  id_mesa               Int?
+  codigo_comanda        String?  @db.VarChar(50)
+  status_comanda        String?  @default("ABERTA") @db.VarChar(20)
+  nome_cliente_comanda  String?  @db.VarChar(100)
+  nome_atendente        String?  @db.VarChar(255)
 
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA (Seguros para banco em produção)
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  origem_criacao        String    @default("LOCAL") @db.VarChar(20)
+  sincronizado_cloud    Boolean   @default(false)
+  atualizado_em         DateTime  @default(now()) @updatedAt
+  deletado_em           DateTime?
 
-  mesas   mesas? @relation(fields: [id_mesa], references: [id_mesa], onDelete: SetNull)
+  nota_fiscal               notas_fiscais?
+  mesas                     mesas? @relation(fields: [id_mesa], references: [id_mesa], onDelete: SetNull)
   financeiro_contas_receber financeiro_contas_receber[]
-  agendamento_servico agendamentos_servicos?
-  pedido_items          pedido_items[]
-  caixa_pdv             caixa_pdv?               @relation(fields: [id_caixa_pdv], references: [id_caixa], map: "fk_pedidos_caixa_pdv")
-  cupons_desconto       cupons_desconto?         @relation(fields: [id_cupom_utilizado], references: [id_cupom], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_cupom")
-  tenants               tenants                  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_pedidos_tenants")
-  enderecos             enderecos?               @relation(fields: [id_endereco_entrega], references: [id_endereco], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_endereco")
-  usuarios              usuarios                 @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_usuario")
-  transacoes_financeiras transacoes_financeiras[]
+  agendamento_servico       agendamentos_servicos?
+  pedido_items              pedido_items[]
+  caixa_pdv                 caixa_pdv? @relation(fields: [id_caixa_pdv], references: [id_caixa], map: "fk_pedidos_caixa_pdv")
+  cupons_desconto           cupons_desconto? @relation(fields: [id_cupom_utilizado], references: [id_cupom], onDelete: NoAction, onUpdate: NoAction, map: "fk_pedidos_cupom")
+  tenants                   tenants @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_pedidos_tenants")
+  enderecos                 enderecos? @relation(fields: [id_endereco_entrega], references: [id_endereco], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_endereco")
+  usuarios                  usuarios @relation(fields: [id_usuario], references: [id_usuario], onDelete: NoAction, onUpdate: NoAction, map: "pedidos_fk_usuario")
+  transacoes_financeiras    transacoes_financeiras[]
 
   @@index([id_endereco_entrega], map: "id_endereco_entrega")
   @@index([id_usuario], map: "id_usuario")
   @@index([id_cupom_utilizado], map: "fk_pedidos_cupom")
   @@index([id_caixa_pdv], map: "idx_pedidos_caixa_pdv")
   @@index([id_tenant], map: "fk_pedidos_tenants")
+  @@index([sincronizado_cloud], map: "idx_sync_pedidos")
 }
 
 model impressoras {
@@ -142,23 +157,31 @@ model impressoras {
 }
 
 model mesas {
-  id_mesa    Int       @id @default(autoincrement())
-  id_tenant  Int
-  nome       String    @db.VarChar(50) // Ex: "Mesa 01", "Camarote A"
-  status     String    @default("LIVRE") @db.VarChar(20) // LIVRE, OCUPADA, RESERVADA
-  token        String?   @unique @db.VarChar(100) 
-  url_qrcode   String?   @db.VarChar(2048)
-  mesa_agrupada  String?   @db.VarChar(50)
+  id_mesa       Int      @id @default(autoincrement())
+  id_tenant     Int
+  nome          String   @db.VarChar(50)
+  status        String   @default("LIVRE") @db.VarChar(20)
+  token         String?  @unique @db.VarChar(100) 
+  url_qrcode    String?  @db.VarChar(2048)
+  mesa_agrupada String?  @db.VarChar(50)
   
-  tenants    tenants   @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
-  pedidos    pedidos[] // Histórico de comandas dessa mesa
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud    Boolean   @default(false)
+  atualizado_em         DateTime  @default(now()) @updatedAt
+  deletado_em           DateTime?
+
+  tenants tenants @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  pedidos pedidos[]
 
   @@index([id_tenant], map: "idx_mesas_tenant")
+  @@index([sincronizado_cloud], map: "idx_sync_mesas")
 }
 
 model produtos {
   id_produto                  Int                           @id @default(autoincrement())
   id_tenant                   Int
+  id_fiscal                   String?       @unique @db.VarChar(36)
   nome                        String                        @db.VarChar(255)
   slug                        String?                       @unique @db.VarChar(255)
   descricao                   String?                       @db.Text
@@ -210,8 +233,17 @@ model produtos {
   aliq_pis                    Decimal?                      @default(0.00) @db.Decimal(5, 2)
   aliq_cofins                 Decimal?                      @default(0.00) @db.Decimal(5, 2)
   aliq_iss                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Usado se for serviço
+  aliq_ipi                    Decimal?                      @default(0.00) @db.Decimal(5, 2)
+  cClassTrib                  String?                       @db.VarChar(20)
   aliq_ibs                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Reforma Tributária
   aliq_cbs                    Decimal?                      @default(0.00) @db.Decimal(5, 2) // Reforma Tributária
+  
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
 
   // RELACIONAMENTOS
   AuditoriaProduto            AuditoriaProduto[]
@@ -244,26 +276,34 @@ model produtos {
   @@index([id_subcategoria], map: "id_subcategoria")
   @@index([id_fornecedor], map: "idx_produto_fornecedor")
   @@index([id_tenant], map: "fk_produtos_tenants")
+  @@index([sincronizado_cloud], map: "idx_sync_produtos")
 }
 
-  model produto_variacoes {
-    id_variacao    Int      @id @default(autoincrement())
-    id_produto     Int
-    id_tenant      Int
-    sku            String?  @db.VarChar(100)  // Código único da variação (ex: CAM-VER-M)
-    cor            String?  @db.VarChar(50)   // Ex: Verde, Vermelho
-    tamanho        String?  @db.VarChar(50)   // Ex: P, M, GG, 38, 40
-    estoque        Decimal  @default(0.000) @db.Decimal(10, 3)
-    preco_adicional Decimal @default(0.00) @db.Decimal(10, 2) // Se a GG for R$ 5 mais cara
-    imagem_url     String?  @db.VarChar(2048) // Foto específica da camisa vermelha (opcional)
-    ativo          Boolean  @default(true)
+model produto_variacoes {
+  id_variacao    Int      @id @default(autoincrement())
+  id_produto     Int
+  id_tenant      Int
+  sku            String?  @db.VarChar(100)  // Código único da variação (ex: CAM-VER-M)
+  cor            String?  @db.VarChar(50)   // Ex: Verde, Vermelho
+  tamanho        String?  @db.VarChar(50)   // Ex: P, M, GG, 38, 40
+  estoque        Decimal  @default(0.000) @db.Decimal(10, 3)
+  preco_adicional Decimal @default(0.00) @db.Decimal(10, 2) // Se a GG for R$ 5 mais cara
+  imagem_url     String?  @db.VarChar(2048) // Foto específica da camisa vermelha (opcional)
+  ativo          Boolean  @default(true)
 
-    produtos       produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, map: "fk_variacao_produto")
-    tenants        tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_variacao_tenant")
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
 
-    @@index([id_produto], map: "idx_variacoes_produto")
-    @@index([id_tenant], map: "idx_variacoes_tenant")
-  }
+  produtos       produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, map: "fk_variacao_produto")
+  tenants        tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade, map: "fk_variacao_tenant")
+
+  @@index([id_produto], map: "idx_variacoes_produto")
+  @@index([id_tenant], map: "idx_variacoes_tenant")
+  @@index([sincronizado_cloud], map: "idx_sync_variacoes")
+}
 
 model usuarios {
   id_usuario                    Int       @id @default(autoincrement())
@@ -304,7 +344,7 @@ model funcionarios {
   nome_completo          String    @db.VarChar(255)
   email                  String    @db.VarChar(255)
   hash_senha             String    @db.VarChar(255)
-  sessao_token          String?   @db.VarChar(255)
+  sessao_token           String?   @db.VarChar(255)
   cpf_criptografado      String?   @db.Text
   telefone_criptografado String?   @db.Text
   role                   String    @default("ATENDENTE") @db.VarChar(50)
@@ -321,6 +361,12 @@ model funcionarios {
   atuacao                Json?     // Salva como array JSON: ["Ansiedade...", "Tratamento..."]
   sobre                  Json?     // Salva como array JSON: ["Simone Vieira da Silva...", "Sua abordagem..."]
 
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   // Relação com a tabela de cargos personalizados
   id_cargo               Int?      
   cargos                 cargos?   @relation(fields: [id_cargo], references: [id_cargo], onDelete: SetNull)
@@ -334,31 +380,39 @@ model funcionarios {
   MovimentacaoEstoque    MovimentacaoEstoque[]
   financeiro_baixas      financeiro_baixas[]
   financeiro_contas_pagar financeiro_contas_pagar[]
-  agendamentos_servicos agendamentos_servicos[]
+  agendamentos_servicos  agendamentos_servicos[]
   
   @@unique([email, id_tenant], map: "uk_email_tenant_func")
   @@index([id_tenant], map: "fk_funcionarios_tenants_idx")
   @@index([id_cargo], map: "idx_funcionarios_cargo")
+  @@index([sincronizado_cloud], map: "idx_sync_funcionarios")
 }
 
 model cargos {
-  id_cargo     Int            @id @default(autoincrement())
+  id_cargo     Int          @id @default(autoincrement())
   id_tenant    Int
-  nome         String         @db.VarChar(100)
-  descricao    String?        @db.VarChar(255)
-  permissoes   Json           
+  nome         String       @db.VarChar(100)
+  descricao    String?      @db.VarChar(255)
+  permissoes   Json            
   
   // A TRAVA MESTRA: Garante que o cargo do Dono não seja apagado nem modificado
-  is_dono      Boolean        @default(false)
+  is_dono      Boolean      @default(false)
   
-  ativo        Boolean        @default(true)
-  criado_em    DateTime       @default(now()) @db.Timestamp(0)
+  ativo        Boolean      @default(true)
+  criado_em    DateTime     @default(now()) @db.Timestamp(0)
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
   
-  tenants      tenants        @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
+  tenants      tenants      @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
   funcionarios funcionarios[]
 
   @@unique([nome, id_tenant], map: "uk_cargo_nome_tenant")
   @@index([id_tenant], map: "idx_cargos_tenant")
+  @@index([sincronizado_cloud], map: "idx_sync_cargos")
 }
 
 model categorias {
@@ -522,19 +576,27 @@ model lista_desejos {
 }
 
 model log_estoque {
-  id_log                 Int           @id @default(autoincrement())
+  id_log                 Int      @id @default(autoincrement())
   id_produto             Int
-  quantidade_anterior    Decimal       @db.Decimal(10, 3)
-  quantidade_alterada    Decimal       @db.Decimal(10, 3)
-  quantidade_nova        Decimal       @db.Decimal(10, 3)
-  motivo                 String        @db.VarChar(255)
+  quantidade_anterior    Decimal  @db.Decimal(10, 3)
+  quantidade_alterada    Decimal  @db.Decimal(10, 3)
+  quantidade_nova        Decimal  @db.Decimal(10, 3)
+  motivo                 String   @db.VarChar(255)
   id_usuario_responsavel Int?
-  data_movimentacao      DateTime      @default(now()) @db.Timestamp(0)
-  produtos               produtos      @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_log_estoque_produto")
-  funcionarios           funcionarios? @relation(fields: [id_usuario_responsavel], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_log_estoque_funcionario")
+  data_movimentacao      DateTime @default(now()) @db.Timestamp(0)
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud    Boolean   @default(false)
+  atualizado_em         DateTime  @default(now()) @updatedAt
+  deletado_em           DateTime?
+
+  produtos     produtos @relation(fields: [id_produto], references: [id_produto], onDelete: Cascade, onUpdate: NoAction, map: "fk_log_estoque_produto")
+  funcionarios funcionarios? @relation(fields: [id_usuario_responsavel], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_log_estoque_funcionario")
 
   @@index([id_usuario_responsavel], map: "fk_log_estoque_funcionario")
   @@index([id_produto], map: "idx_id_produto")
+  @@index([sincronizado_cloud], map: "idx_sync_log_estoque")
 }
 
 model produto_subimagens {
@@ -601,7 +663,15 @@ model lojas {
   dias_funcionamento String?  @default("0,1,2,3,4,5,6") @db.VarChar(50)
   ifood_status    String?  @default("AVAILABLE") @db.VarChar(50) // 🟢 ADICIONADO PARA O IFOOD
   criado_em       DateTime @default(now()) @db.Timestamp(0)
+  
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   agendamentos_servicos agendamentos_servicos[]
+  @@index([sincronizado_cloud], map: "idx_sync_lojas")
 }
 
 model subcategorias {
@@ -696,9 +766,17 @@ model fornecedores {
   prazo_medio             Int?
   status                  String?                   @default("Ativo") @db.VarChar(20)
   criado_em               DateTime?                 @default(now()) @db.Timestamp(0)
+  
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   financeiro_contas_pagar financeiro_contas_pagar[]
   notas_fiscais           notas_fiscais[]
   produtos                produtos[]
+  @@index([sincronizado_cloud], map: "idx_sync_fornecedores")
 }
 
 model campanha_marketing_produtos {
@@ -751,24 +829,32 @@ model IfoodAuth {
 }
 
 model caixa_pdv {
-  id_caixa           Int                  @id @default(autoincrement())
-  id_tenant          Int
-  id_usuario         Int
-  data_abertura      DateTime             @default(now()) @db.DateTime(0)
-  data_fechamento    DateTime?            @db.DateTime(0)
-  saldo_inicial      Decimal              @db.Decimal(10, 2)
-  saldo_final        Decimal?             @db.Decimal(10, 2)
-  saldo_sistema      Decimal              @default(0.00) @db.Decimal(10, 2)
-  status             String               @default("ABERTO") @db.VarChar(20)
-  observacoes        String?              @db.Text
-  funcionarios       funcionarios         @relation(fields: [id_usuario], references: [id_funcionario], map: "fk_caixa_pdv_funcionario")
-  tenants            tenants              @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_caixa_tenants")
+  id_caixa          Int       @id @default(autoincrement())
+  id_tenant         Int
+  id_usuario        Int
+  data_abertura     DateTime  @default(now()) @db.DateTime(0)
+  data_fechamento   DateTime? @db.DateTime(0)
+  saldo_inicial     Decimal   @db.Decimal(10, 2)
+  saldo_final       Decimal?  @db.Decimal(10, 2)
+  saldo_sistema     Decimal   @default(0.00) @db.Decimal(10, 2)
+  status            String    @default("ABERTO") @db.VarChar(20)
+  observacoes       String?   @db.Text
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud    Boolean   @default(false)
+  atualizado_em         DateTime  @default(now()) @updatedAt
+  deletado_em           DateTime?
+
+  funcionarios       funcionarios @relation(fields: [id_usuario], references: [id_funcionario], map: "fk_caixa_pdv_funcionario")
+  tenants            tenants @relation(fields: [id_tenant], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_caixa_tenants")
   financeiro_baixas  financeiro_baixas[]
   movimentacao_caixa movimentacao_caixa[]
   pedidos            pedidos[]
 
   @@index([id_usuario], map: "idx_caixa_pdv_funcionario")
   @@index([id_tenant], map: "fk_caixa_tenants")
+  @@index([sincronizado_cloud], map: "idx_sync_caixa_pdv")
 }
 
 model movimentacao_caixa {
@@ -793,11 +879,20 @@ model MovimentacaoEstoque {
   origem_destino  String?
   usuario_id      Int?
   data            DateTime      @default(now())
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  origem_criacao         String    @default("LOCAL") @db.VarChar(20)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   produtos        produtos      @relation(fields: [id_produto], references: [id_produto])
   funcionarios    funcionarios? @relation(fields: [usuario_id], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_movimentacao_estoque_funcionario")
 
   @@index([id_produto], map: "MovimentacaoEstoque_id_produto_fkey")
   @@index([usuario_id], map: "fk_movimentacao_estoque_funcionario")
+  @@index([sincronizado_cloud], map: "idx_sync_mov_estoque")
 }
 
 model AuditoriaProduto {
@@ -825,6 +920,7 @@ model gateway_rules {
   is_active  Boolean  @default(true)
   updated_at DateTime @default(now()) @db.Timestamp(0)
   id_tenant  Int      @default(1)
+  fiscal_payment_id String?
 
   @@id([method, id_tenant])
 }
@@ -927,34 +1023,41 @@ model financeiro_contas_pagar {
 }
 
 model financeiro_contas_receber {
-  id                    Int                              @id @default(autoincrement())
-  id_tenant             Int
-  id_loja               Int?
-  descricao             String                           @db.VarChar(255)
-  valor_total           Decimal                          @db.Decimal(10, 2)
-  valor_recebido        Decimal                          @default(0.00) @db.Decimal(10, 2)
-  saldo_restante        Decimal                          @db.Decimal(10, 2)
-  data_competencia      DateTime                         @db.Date
-  data_vencimento       DateTime                         @db.Date
-  data_liquidacao       DateTime?
-  status                financeiro_contas_receber_status @default(PENDENTE)
-  id_usuario            Int?
-  id_pedido             Int?
-  id_categoria          Int?
-  parcela_numero        Int?                             @default(1)
-  parcela_total         Int?                             @default(1)
-  criado_em             DateTime                         @default(now())
-  atualizado_em         DateTime                         @updatedAt
+  id               Int      @id @default(autoincrement())
+  id_tenant        Int
+  id_loja          Int?
+  descricao        String   @db.VarChar(255)
+  valor_total      Decimal  @db.Decimal(10, 2)
+  valor_recebido   Decimal  @default(0.00) @db.Decimal(10, 2)
+  saldo_restante   Decimal  @db.Decimal(10, 2)
+  data_competencia DateTime @db.Date
+  data_vencimento  DateTime @db.Date
+  data_liquidacao  DateTime?
+  status           financeiro_contas_receber_status @default(PENDENTE)
+  id_usuario       Int?
+  id_pedido        Int?
+  id_categoria     Int?
+  parcela_numero   Int?     @default(1)
+  parcela_total    Int?     @default(1)
+  criado_em        DateTime @default(now())
+  atualizado_em    DateTime @updatedAt // Campo já existia, foi mantido
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud    Boolean   @default(false)
+  deletado_em           DateTime?
+
   financeiro_baixas     financeiro_baixas[]
-  financeiro_categorias financeiro_categorias?           @relation(fields: [id_categoria], references: [id], map: "fk_fcr_categoria")
-  pedidos               pedidos?                         @relation(fields: [id_pedido], references: [id_pedido], map: "fk_fcr_pedido")
-  usuarios              usuarios?                        @relation(fields: [id_usuario], references: [id_usuario], map: "fk_fcr_usuario")
+  financeiro_categorias financeiro_categorias? @relation(fields: [id_categoria], references: [id], map: "fk_fcr_categoria")
+  pedidos               pedidos? @relation(fields: [id_pedido], references: [id_pedido], map: "fk_fcr_pedido")
+  usuarios              usuarios? @relation(fields: [id_usuario], references: [id_usuario], map: "fk_fcr_usuario")
 
   @@index([id_categoria], map: "fk_fcr_categoria")
   @@index([id_pedido], map: "idx_fcr_pedido")
   @@index([status], map: "idx_fcr_status")
   @@index([data_vencimento], map: "idx_fcr_vencimento")
   @@index([id_usuario], map: "fk_fcr_usuario")
+  @@index([sincronizado_cloud], map: "idx_sync_fcr")
 }
 
 model ordens_producao {
@@ -963,11 +1066,19 @@ model ordens_producao {
   quantidade    Decimal       @db.Decimal(10, 3)
   id_usuario    Int?
   data_producao DateTime?     @default(now()) @db.Timestamp(0)
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   produtos      produtos      @relation(fields: [id_produto], references: [id_produto], onDelete: NoAction, onUpdate: NoAction, map: "fk_op_produto")
   funcionarios  funcionarios? @relation(fields: [id_usuario], references: [id_funcionario], onDelete: NoAction, onUpdate: NoAction, map: "fk_op_funcionario")
 
   @@index([id_produto], map: "fk_op_produto")
   @@index([id_usuario], map: "fk_op_funcionario")
+  @@index([sincronizado_cloud], map: "idx_sync_ordens_prod")
 }
 
 model produto_composicao {
@@ -975,11 +1086,19 @@ model produto_composicao {
   id_produto_final      Int
   id_insumo             Int
   quantidade_necessaria Decimal  @db.Decimal(10, 3)
+
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
   insumo                produtos @relation("RelacaoInsumo", fields: [id_insumo], references: [id_produto], onDelete: Cascade, map: "fk_composicao_insumo")
   produto_final         produtos @relation("RelacaoProdutoFinal", fields: [id_produto_final], references: [id_produto], onDelete: Cascade, map: "fk_composicao_produto_final")
 
   @@index([id_insumo], map: "idx_insumo")
   @@index([id_produto_final], map: "idx_produto_final")
+  @@index([sincronizado_cloud], map: "idx_sync_composicao")
 }
 
 model tenants {
@@ -1007,11 +1126,18 @@ model tenants {
   id_assinatura_ext   String?   @db.VarChar(255)
   limite_produtos     Int?      @default(50)
   limite_usuarios     Int?      @default(2)
+  limite_caixas       Int?      @default(1)
   ativo               Boolean?  @default(true)
   criado_em           DateTime? @default(now()) @db.Timestamp(0)
   dominio_customizado String?   @unique @db.VarChar(255)
 
-  aiConfiguracoes        AiConfiguracoes?
+  // 🟢 CAMPOS EXCLUSIVOS PARA SINCRONIZAÇÃO HÍBRIDA
+  sync_id                String?   @unique @default(uuid()) @db.VarChar(36)
+  sincronizado_cloud     Boolean   @default(false)
+  atualizado_em          DateTime  @default(now()) @updatedAt
+  deletado_em            DateTime?
+
+  aiConfiguracoes         AiConfiguracoes?
   
   // Relacionamentos
   AuditoriaProduto       AuditoriaProduto[]
@@ -1042,6 +1168,8 @@ model tenants {
   configuracoes_fiscais configuracoes_fiscais?
   notas_fiscais          notas_fiscais[]
   mesas mesas[]
+
+  @@index([sincronizado_cloud], map: "idx_sync_tenants")
 }
 
 model tenant_webhooks {
@@ -1093,6 +1221,7 @@ model Planos {
   dias_teste      Int      @default(7)
   limite_produtos Int      @default(100)
   limite_usuarios Int      @default(1)
+  limite_caixas   Int      @default(1)
   destaque        Boolean  @default(false)
   ativo           Boolean  @default(true)
   descricao       String?  @db.Text
@@ -1531,4 +1660,832 @@ model whazing_configuracoes {
   tenants             tenants  @relation(fields: [id_tenant], references: [id], onDelete: Cascade)
 
   @@index([id_tenant], map: "idx_kanban_config_tenant")
+}
+
+// ============================================================================
+// 🟢 MOTOR FISCAL NATIVO INTEGRADO (FASE 1 A 5 + REFORMA TRIBUTÁRIA IBS/CBS)
+// ============================================================================
+
+enum RegimeTributario {
+  SIMPLES_NACIONAL
+  SIMPLES_EXCESSO
+  REGIME_NORMAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
+model fiscal_empresas {
+  id                    String   @id @default(uuid())
+  tenant_id             String
+  cnpj                  String   @unique
+  razao_social          String
+  nome_fantasia         String?
+  ie                    String?
+  im                    String?
+  crt                   RegimeTributario
+  cnae                  String?
+  logradouro            String
+  numero                String
+  bairro                String
+  municipio             String
+  codigo_municipio_ibge String
+  uf                    String
+  cep                   String
+  pais                  String   @default("Brasil")
+  telefone              String?
+  email                 String?
+
+  estabelecimentos      fiscal_estabelecimentos[]
+
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  @@map("fiscal_empresas")
+  @@index([tenant_id])
+}
+
+model fiscal_estabelecimentos {
+  id                    String   @id @default(uuid())
+  tenant_id             String
+  empresa_id            String
+  cnpj                  String   @unique
+  nome                  String
+  ie                    String?
+
+  logradouro            String?
+  numero                String?
+  bairro                String?
+  municipio             String?
+  codigo_municipio_ibge String?
+  uf                    String?
+  cep                   String?
+
+  csc                   String?
+  id_token_csc          String?
+
+  empresa               fiscal_empresas @relation(fields: [empresa_id], references: [id], onDelete: Cascade)
+  certificados          fiscal_certificados[]
+  series                fiscal_series[]
+  pdv_caixas            pdv_caixas[]
+
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  @@map("fiscal_estabelecimentos")
+  @@index([tenant_id])
+}
+
+model fiscal_certificados {
+  id                   String   @id @default(uuid())
+  tenant_id            String
+  estabelecimento_id   String
+
+  certificado_base64   String   @db.LongText
+  certificado_iv       String
+  certificado_auth_tag String
+
+  senha_criptografada  String   @db.Text
+  senha_iv             String
+  senha_auth_tag       String
+
+  validade_inicio      DateTime
+  validade_fim         DateTime
+  titular              String
+  tipo                 String   @default("A1")
+  ativo                Boolean  @default(true)
+
+  estabelecimento      fiscal_estabelecimentos @relation(fields: [estabelecimento_id], references: [id], onDelete: Cascade)
+
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  @@map("fiscal_certificados")
+  @@index([tenant_id])
+}
+
+model fiscal_series {
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  estabelecimento_id String
+  modelo             String   // 55 (NF-e) ou 65 (NFC-e)
+  serie              Int
+  ativo              Boolean  @default(true)
+
+  estabelecimento    fiscal_estabelecimentos @relation(fields: [estabelecimento_id], references: [id], onDelete: Cascade)
+  numeracoes         fiscal_numeracoes?
+  notas              fiscal_notas[]
+  pdv_caixas         pdv_caixas[]
+
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@map("fiscal_series")
+  @@unique([estabelecimento_id, modelo, serie])
+  @@index([tenant_id])
+}
+
+model fiscal_numeracoes {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  serie_id      String   @unique
+  ultimo_numero Int      @default(0)
+
+  serie         fiscal_series @relation(fields: [serie_id], references: [id], onDelete: Cascade)
+
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@map("fiscal_numeracoes")
+  @@index([tenant_id])
+}
+
+model fiscal_cfops {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  codigo          String
+  descricao       String    @db.Text
+  tipo_operacao   String    // ENTRADA ou SAIDA
+  aplicacao       String    // INTERNA, INTERESTADUAL, EXTERIOR
+
+  validade_inicio DateTime  @default(now())
+  validade_fim    DateTime?
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@map("fiscal_cfops")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_ncms {
+  id                 String    @id @default(uuid())
+  tenant_id          String
+  codigo             String
+  descricao          String    @db.Text
+  aliquota_nacional  Decimal?  @db.Decimal(5, 2)
+  aliquota_importada Decimal?  @db.Decimal(5, 2)
+  aliquota_estadual  Decimal?  @db.Decimal(5, 2)
+  aliquota_municipal Decimal?  @db.Decimal(5, 2)
+
+  validade_inicio    DateTime  @default(now())
+  validade_fim       DateTime?
+
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  @@map("fiscal_ncms")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_cests {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  codigo          String
+  descricao       String    @db.Text
+
+  validade_inicio DateTime  @default(now())
+  validade_fim    DateTime?
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@map("fiscal_cests")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_origens {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  codigo          Int
+  descricao       String    @db.Text
+
+  validade_inicio DateTime  @default(now())
+  validade_fim    DateTime?
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@map("fiscal_origens")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_csts {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  codigo          String
+  descricao       String    @db.Text
+
+  validade_inicio DateTime  @default(now())
+  validade_fim    DateTime?
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@map("fiscal_csts")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_csosns {
+  id              String    @id @default(uuid())
+  tenant_id       String
+  codigo          String
+  descricao       String    @db.Text
+
+  validade_inicio DateTime  @default(now())
+  validade_fim    DateTime?
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  @@map("fiscal_csosns")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_csts_ibs_cbs {
+  id                        String   @id @default(uuid())
+  tenant_id                 String
+  codigo                    String   @db.VarChar(3)
+  descricao                 String   @db.Text
+
+  exige_tributacao          Boolean  @default(false)
+  reducao_bc                Boolean  @default(false)
+  reducao_aliquota          Boolean  @default(false)
+  transferencia_credito     Boolean  @default(false)
+  diferimento               Boolean  @default(false)
+  monofasica                Boolean  @default(false)
+  credito_presumido_ibs_zfm Boolean  @default(false)
+  ajuste_credito            Boolean  @default(false)
+
+  classificacoes            fiscal_class_trib_ibs_cbs[]
+
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+
+  @@map("fiscal_csts_ibs_cbs")
+  @@unique([tenant_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_class_trib_ibs_cbs {
+  id                     String   @id @default(uuid())
+  tenant_id              String
+  codigo                 String   @db.VarChar(6)
+  cst_id                 String
+  descricao_reduzida     String   @db.Text
+
+  reducao_percentual_ibs Decimal? @db.Decimal(5, 2)
+  reducao_percentual_cbs Decimal? @db.Decimal(5, 2)
+
+  tributacao_regular     Boolean  @default(false)
+  credito_presumido      Boolean  @default(false)
+  estorno_credito        Boolean  @default(false)
+
+  pct_bio_combustivel    Decimal? @db.Decimal(5, 2)
+
+  aliquota               String?
+  rb_sn                  String?
+
+  dfes_relacionados      Json?
+  no_anexo               String?
+
+  cst                    fiscal_csts_ibs_cbs @relation(fields: [cst_id], references: [id], onDelete: Cascade)
+
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+
+  @@map("fiscal_class_trib_ibs_cbs")
+  @@unique([tenant_id, cst_id, codigo])
+  @@index([tenant_id])
+}
+
+model fiscal_regras_icms {
+  id              String            @id @default(uuid())
+  tenant_id       String
+  regime          RegimeTributario?
+  nome_regra      String
+  uf_origem       String
+  uf_destino      String
+  cst_csosn       String
+  ncm             String?
+  cest            String?
+  cfop            String?
+  tipo_cliente    String?
+  finalidade      Int?
+  base_calculo    Decimal           @db.Decimal(5, 2)
+  aliquota        Decimal           @db.Decimal(5, 2)
+  mva_st          Decimal?          @db.Decimal(5, 2)
+  aliquota_st     Decimal?          @db.Decimal(5, 2)
+
+  validade_inicio DateTime
+  validade_fim    DateTime?
+
+  validado_por    String?
+  validado_em     DateTime?
+
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  @@map("fiscal_regras_icms")
+  @@index([tenant_id])
+}
+
+model fiscal_regras_ipi {
+  id              String            @id @default(uuid())
+  tenant_id       String
+  regime          RegimeTributario?
+  nome_regra      String
+  cst             String
+  ncm             String?
+  cest            String?
+  cfop            String?
+  aliquota        Decimal           @db.Decimal(5, 2)
+
+  validade_inicio DateTime
+  validade_fim    DateTime?
+
+  validado_por    String?
+  validado_em     DateTime?
+
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  @@map("fiscal_regras_ipi")
+  @@index([tenant_id])
+}
+
+model fiscal_regras_pis_cofins {
+  id              String            @id @default(uuid())
+  tenant_id       String
+  regime          RegimeTributario?
+  nome_regra      String
+  cst             String
+  ncm             String?
+  cest            String?
+  cfop            String?
+  aliquota_pis    Decimal           @db.Decimal(5, 2)
+  aliquota_cofins Decimal           @db.Decimal(5, 2)
+
+  validade_inicio DateTime
+  validade_fim    DateTime?
+
+  validado_por    String?
+  validado_em     DateTime?
+
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  @@map("fiscal_regras_pis_cofins")
+  @@index([tenant_id])
+}
+
+model fiscal_regras_ibs_cbs {
+  id              String            @id @default(uuid())
+  tenant_id       String
+  regime          RegimeTributario?
+  nome_regra      String
+  cst             String?
+  ncm             String?
+  cest            String?
+  cfop            String?
+  cClassTrib      String?
+  aliquota_ibs    Decimal           @db.Decimal(5, 2)
+  aliquota_cbs    Decimal           @db.Decimal(5, 2)
+
+  validade_inicio DateTime
+  validade_fim    DateTime?
+
+  validado_por    String?
+  validado_em     DateTime?
+
+  created_at      DateTime          @default(now())
+  updated_at      DateTime          @updatedAt
+
+  @@map("fiscal_regras_ibs_cbs")
+  @@index([tenant_id])
+}
+
+model fiscal_produtos {
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  codigo_interno     String
+  ean_gtin           String?
+  descricao          String
+  ncm                String
+  cest               String?
+  unidade_comercial  String
+  unidade_tributavel String
+  fator_conversao    Decimal  @default(1.0000) @db.Decimal(10, 4)
+  valor_compra       Decimal? @db.Decimal(10, 2)
+  valor_venda        Decimal? @db.Decimal(10, 2)
+  origem             Int      @default(0)
+
+  cst_csosn_padrao   String?
+  aliquota_icms      Decimal? @db.Decimal(5, 2)
+  aliquota_ipi       Decimal? @db.Decimal(5, 2)
+  aliquota_pis       Decimal? @db.Decimal(5, 2)
+  aliquota_cofins    Decimal? @db.Decimal(5, 2)
+  cClassTrib         String?
+  aliquota_ibs       Decimal? @db.Decimal(5, 2)
+  aliquota_cbs       Decimal? @db.Decimal(5, 2)
+
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@map("fiscal_produtos")
+  @@unique([tenant_id, codigo_interno])
+  @@index([tenant_id])
+}
+
+model fiscal_cenarios_fiscais {
+  id                String   @id @default(uuid())
+  tenant_id         String
+
+  operacao          String
+  documento         String
+  finalidade        Int
+  modelo            String
+  cfop_padrao       String
+
+  movimenta_estoque Boolean  @default(true)
+  gera_financeiro   Boolean  @default(true)
+
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("fiscal_cenarios_fiscais")
+  @@index([tenant_id])
+}
+
+enum StatusNotaFiscal {
+  RASCUNHO
+  PROCESSANDO
+  AUTORIZADA
+  REJEITADA
+  CANCELADA
+  DENEGADA
+  CONTINGENCIA
+  INUTILIZADA
+}
+
+model fiscal_destinatarios {
+  id                    String   @id @default(uuid())
+  tenant_id             String
+
+  cpf_cnpj              String
+  razao_social          String
+  ie                    String?
+  tipo_contribuinte     String
+  email                 String?
+
+  logradouro            String
+  numero                String
+  bairro                String
+  municipio             String
+  codigo_municipio_ibge String
+  uf                    String
+  cep                   String
+
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+
+  @@map("fiscal_destinatarios")
+  @@unique([tenant_id, cpf_cnpj])
+  @@index([tenant_id])
+}
+
+model fiscal_notas {
+  id                    String                   @id @default(uuid())
+  tenant_id             String
+  id_pedido             Int?
+
+  estabelecimento_id    String
+  cenario_id            String
+  destinatario_id       String?
+  serie_id              String
+
+  modelo                String
+  numero                Int
+  chave_acesso          String?                  @unique
+  ambiente              Int
+  tipo                  Int
+  finalidade            Int
+  natureza_operacao     String
+  forma_pagamento_id    String?
+  forma_pagamento       fiscal_formas_pagamento? @relation(fields: [forma_pagamento_id], references: [id])
+
+  data_emissao          DateTime                 @default(now())
+  data_saida_entrada    DateTime?
+
+  status                StatusNotaFiscal         @default(RASCUNHO)
+  codigo_status_sefaz   String?
+  motivo_status_sefaz   String?                  @db.Text
+  protocolo_autorizacao String?
+  data_autorizacao      DateTime?
+
+  valor_total_produtos  Decimal                  @db.Decimal(10, 2)
+  valor_frete           Decimal                  @db.Decimal(10, 2)
+  valor_seguro          Decimal                  @db.Decimal(10, 2)
+  valor_desconto        Decimal                  @db.Decimal(10, 2)
+  valor_outras          Decimal                  @db.Decimal(10, 2)
+  valor_total_nota      Decimal                  @db.Decimal(10, 2)
+
+  xml_gerado            String?                  @db.LongText
+  xml_assinado          String?                  @db.LongText
+  xml_autorizado        String?                  @db.LongText
+
+  itens                 fiscal_nota_itens[]
+  referenciados         fiscal_documentos_referenciados[]
+  serie                 fiscal_series            @relation(fields: [serie_id], references: [id])
+  eventos               fiscal_eventos[]
+
+  created_at            DateTime                 @default(now())
+  updated_at            DateTime                 @updatedAt
+
+  @@map("fiscal_notas")
+  @@unique([tenant_id, estabelecimento_id, modelo, serie_id, numero])
+  @@index([tenant_id])
+  @@index([id_pedido])
+}
+
+enum TipoEventoFiscal {
+  CANCELAMENTO
+  CC_E
+  INUTILIZACAO
+  CIENCIA
+  CONFIRMACAO
+  DESCONHECIMENTO
+  OPERACAO_NAO_REALIZADA
+}
+
+model fiscal_eventos {
+  id                  String           @id @default(uuid())
+  tenant_id           String
+
+  nota_id             String
+  tipo                TipoEventoFiscal
+  sequencial          Int              @default(1)
+
+  data_evento         DateTime         @default(now())
+  protocolo_sefaz     String?
+  payload_xml_envio   String?          @db.LongText
+  payload_xml_retorno String?          @db.LongText
+  justificativa       String?          @db.Text
+  codigo_status_sefaz String?
+  motivo_status_sefaz String?          @db.Text
+
+  nota                fiscal_notas     @relation(fields: [nota_id], references: [id], onDelete: Cascade)
+
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @updatedAt
+
+  @@map("fiscal_eventos")
+  @@index([tenant_id])
+}
+
+model fiscal_inutilizacoes {
+  id                  String           @id @default(uuid())
+  tenant_id           String
+  estabelecimento_id  String
+  serie_id            String
+
+  numero_inicial      Int
+  numero_final        Int
+  justificativa       String           @db.Text
+  protocolo_sefaz     String?
+  status              StatusNotaFiscal @default(RASCUNHO)
+  codigo_status_sefaz String?
+  motivo_status_sefaz String?          @db.Text
+
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @updatedAt
+
+  @@map("fiscal_inutilizacoes")
+  @@index([tenant_id])
+}
+
+model fiscal_nota_itens {
+  id                String       @id @default(uuid())
+  tenant_id         String
+  nota_id           String
+
+  numero_item       Int
+  produto_id        String
+  codigo_produto    String
+  descricao_produto String
+  cfop              String
+  ncm               String
+  cest              String?
+  origem            Int
+
+  quantidade        Decimal      @db.Decimal(10, 4)
+  valor_unitario    Decimal      @db.Decimal(10, 4)
+  valor_total       Decimal      @db.Decimal(10, 2)
+  valor_desconto    Decimal      @db.Decimal(10, 2)
+  valor_frete       Decimal      @db.Decimal(10, 2)
+  valor_seguro      Decimal      @db.Decimal(10, 2)
+  valor_outras      Decimal      @db.Decimal(10, 2)
+
+  item_original_id  String?
+
+  icms_cst_csosn    String
+  icms_base         Decimal      @db.Decimal(10, 2)
+  icms_aliquota     Decimal      @db.Decimal(5, 2)
+  icms_valor        Decimal      @db.Decimal(10, 2)
+
+  icms_st_base      Decimal?     @db.Decimal(10, 2)
+  icms_st_aliquota  Decimal?     @db.Decimal(5, 2)
+  icms_st_valor     Decimal?     @db.Decimal(10, 2)
+
+  ipi_cst           String?
+  ipi_base          Decimal?     @db.Decimal(10, 2)
+  ipi_aliquota      Decimal?     @db.Decimal(5, 2)
+  ipi_valor         Decimal?     @db.Decimal(10, 2)
+
+  pis_cst           String?
+  pis_base          Decimal?     @db.Decimal(10, 2)
+  pis_aliquota      Decimal?     @db.Decimal(5, 2)
+  pis_valor         Decimal?     @db.Decimal(10, 2)
+
+  cofins_cst        String?
+  cofins_base       Decimal?     @db.Decimal(10, 2)
+  cofins_aliquota   Decimal?     @db.Decimal(5, 2)
+  cofins_valor      Decimal?     @db.Decimal(10, 2)
+
+  ibs_cst           String?
+  ibs_base          Decimal?     @db.Decimal(10, 2)
+  ibs_aliquota      Decimal?     @db.Decimal(5, 2)
+  ibs_valor         Decimal?     @db.Decimal(10, 2)
+
+  cbs_cst           String?
+  cbs_base          Decimal?     @db.Decimal(10, 2)
+  cbs_aliquota      Decimal?     @db.Decimal(5, 2)
+  cbs_valor         Decimal?     @db.Decimal(10, 2)
+
+  cClassTrib        String?
+
+  nota              fiscal_notas @relation(fields: [nota_id], references: [id], onDelete: Cascade)
+
+  @@map("fiscal_nota_itens")
+  @@index([tenant_id])
+}
+
+enum TipoReferencia {
+  DEVOLUCAO
+  COMPLEMENTAR
+  AJUSTE
+  OUTROS
+}
+
+model fiscal_documentos_referenciados {
+  id              String         @id @default(uuid())
+  tenant_id       String
+  nota_id         String
+  chave_acesso    String
+  tipo_referencia TipoReferencia @default(OUTROS)
+
+  nota            fiscal_notas   @relation(fields: [nota_id], references: [id], onDelete: Cascade)
+
+  @@map("fiscal_documentos_referenciados")
+  @@index([tenant_id])
+}
+
+model fiscal_formas_pagamento {
+  id           String         @id @default(uuid())
+  tenant_id    String
+  descricao    String
+  codigo_sefaz String
+  created_at   DateTime       @default(now())
+  updated_at   DateTime       @updatedAt
+
+  notas        fiscal_notas[]
+
+  @@map("fiscal_formas_pagamento")
+  @@index([tenant_id])
+}
+
+model fiscal_api_tokens {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  token      String   @unique
+  ambiente   Int      @default(2)
+  nome       String
+  ativo      Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  @@map("fiscal_api_tokens")
+  @@index([tenant_id])
+  @@index([token])
+}
+
+model fiscal_usuarios {
+  id         String   @id @default(uuid())
+  tenant_id  String?
+  nome       String
+  email      String   @unique
+  senha      String
+  role       String   @default("USER")
+  ativo      Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  @@map("fiscal_usuarios")
+}
+
+model fiscal_webhooks {
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  estabelecimento_id String?
+  url                String
+  eventos            String
+  secret             String?
+  ativo              Boolean  @default(true)
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@map("fiscal_webhooks")
+  @@index([tenant_id])
+}
+
+// ==========================================
+// MÓDULO PDV (FRENTE DE CAIXA)
+// ==========================================
+
+model pdv_caixas {
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  estabelecimento_id String
+  nome               String   // Ex: Caixa 01, Caixa Principal
+  numero_caixa       Int      @default(1)
+  serie_id           String?
+  token_conexao      String?  @unique @db.VarChar(100)
+  hardware_id        String?  @db.VarChar(255)
+  ativo              Boolean  @default(true)
+
+  turnos             pdv_turnos[]
+  dispositivos       pdv_dispositivos[]
+  estabelecimento    fiscal_estabelecimentos @relation(fields: [estabelecimento_id], references: [id], onDelete: Cascade)
+  serie              fiscal_series?          @relation(fields: [serie_id], references: [id], onDelete: SetNull)
+
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@unique([tenant_id, estabelecimento_id, nome])
+  @@index([tenant_id])
+  @@index([estabelecimento_id])
+  @@index([serie_id])
+  @@map("pdv_caixas")
+}
+
+model pdv_turnos {
+  id                         String   @id @default(uuid())
+  tenant_id                  String
+  estabelecimento_id         String
+  caixa_id                   String
+  usuario_id                 String   // ID do Operador (fiscal_usuarios ou usuarios)
+  status                     String   @default("ABERTO") // ABERTO, FECHADO
+
+  data_abertura              DateTime @default(now())
+  data_fechamento            DateTime?
+
+  valor_abertura             Float    @default(0)
+  valor_fechamento_esperado  Float?
+  valor_fechamento_informado Float?
+
+  observacoes                String?  @db.Text
+
+  caixa                      pdv_caixas @relation(fields: [caixa_id], references: [id], onDelete: Cascade)
+
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
+
+  @@index([tenant_id])
+  @@index([caixa_id])
+  @@map("pdv_turnos")
+}
+
+model pdv_dispositivos {
+  id                 String   @id @default(uuid())
+  tenant_id          String
+  estabelecimento_id String
+  caixa_id           String
+
+  tipo               String   // IMPRESSORA, BALANCA, LEITOR
+  nome               String   // Ex: EPSON TM-T20, Balança Toledo
+
+  configuracao       String   @db.Text // JSON contendo portas COM, BaudRate, Tipo de Conexão, WebSerial, etc.
+  ativo              Boolean  @default(true)
+
+  caixa              pdv_caixas @relation(fields: [caixa_id], references: [id], onDelete: Cascade)
+
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@index([tenant_id])
+  @@index([caixa_id])
+  @@map("pdv_dispositivos")
 }

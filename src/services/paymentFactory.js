@@ -329,13 +329,13 @@ export const processarPagamento = async (metodoPagamento, dados, id_tenant) => {
     try {
         rule = await GatewayRuleModel.getByMethod(methodKey, id_tenant);
     } catch (err) {
-        console.error("⚠️ Erro ao ler regras de pagamento do banco:", err.message);
+        console.error("Erro ao ler regras de pagamento do banco:", err.message);
     }
 
     if (!rule) {
         try {
             if (methodKey !== rawMethod) {
-                console.log(`⚠️ Tentando buscar pela chave original [${rawMethod}]...`);
+                console.log(`Tentando buscar pela chave original [${rawMethod}]...`);
                 rule = await GatewayRuleModel.getByMethod(rawMethod, id_tenant);
             }
         } catch (e) {}
@@ -383,11 +383,14 @@ export const processarPagamento = async (metodoPagamento, dados, id_tenant) => {
             resultado.gateway = gatewayKey;
         }
 
-        console.log(`✅ Sucesso via ${gatewayKey}`);
+        // 🟢 MÁGICA: Injeta o ID da Forma de Pagamento Fiscal para a NF-e / NFC-e usar!
+        resultado.fiscal_payment_id = rule?.fiscal_payment_id || null;
+
+        console.log(`Sucesso via ${gatewayKey}`);
         return resultado;
 
     } catch (error) {
-        console.error(`🔥 Falha no gateway principal (${gatewayKey}): ${error.message}`);
+        console.error(`Falha no gateway principal (${gatewayKey}): ${error.message}`);
 
         if (methodKey === 'PIX' && gatewayKey !== 'OFFLINE') {
             const priorityList = ['MERCADOPAGO', 'ASAAS', 'ABACATEPAY'];

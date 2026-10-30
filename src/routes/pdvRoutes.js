@@ -11,7 +11,17 @@ import {
     getHistoricoCaixas,
     receberSaldoPendente, // 🟢 NOVA FUNÇÃO IMPORTADA AQUI
     gerarPdfA4,           // 🟢 Rota de Impressão A4
-    imprimirTermicaCaixa  // 🟢 Rota de Impressão Térmica
+    imprimirTermicaCaixa, // 🟢 Rota de Impressão Térmica
+    emitirNotaDeVendaPDV, // 🟢 Emissão Fiscal Sob Demanda no PDV
+    listarCaixasPDV,
+    criarCaixaPDV,
+    atualizarCaixaPDV,
+    excluirCaixaPDV,
+    regerarTokenCaixaPDV,
+    dispararCargaCaixasPDV,
+    obterCargaSyncCaixa,
+    vincularCaixaPDV,
+    obterMesasSync
 } from '../controllers/vendaslocais/pdvController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
@@ -20,12 +30,16 @@ import { requirePermission } from '../middlewares/permissionMiddleware.js';
 
 const router = express.Router();
 
+// 🩺 Health Check público para checagem de conectividade do PDV Desktop
+router.all('/health', (req, res) => res.json({ status: 'OK', online: true, timestamp: new Date().toISOString() }));
+
 // --- ACESSOS GERAIS DO OPERADOR (Quem tem PDV_ACCESS pode fazer) ---
 // Usamos requirePermission('PDV_ACCESS') para garantir que o cara tem o cargo certo
 router.get('/status', protect, requirePermission('PDV_ACCESS'), getStatusCaixa);
 router.post('/abrir', protect, requirePermission('PDV_ACCESS'), abrirCaixa);
 router.post('/fechar', protect, requirePermission('PDV_ACCESS'), fecharCaixa);
 router.post('/venda', protect, requirePermission('PDV_ACCESS'), registrarVendaPDV);
+router.post('/venda/:id_pedido/emitir-fiscal', protect, requirePermission('PDV_ACCESS'), emitirNotaDeVendaPDV);
 router.get('/vendas', protect, requirePermission('PDV_ACCESS'), getHistoricoVendas);
 
 // 🟢 NOVA ROTA: RECEBER RESTANTE DO PEDIDO NO BALCÃO (Sinal Online + Restante Local)
@@ -34,6 +48,17 @@ router.post('/receber-restante/:id_pedido', protect, requirePermission('PDV_ACCE
 // 🖨️ ROTAS DE IMPRESSÃO
 router.get('/imprimir/a4/:id', protect, requirePermission('PDV_ACCESS'), gerarPdfA4);
 router.post('/imprimir/termica/:id', protect, requirePermission('PDV_ACCESS'), imprimirTermicaCaixa);
+
+// 📦 GESTÃO DE TERMINAIS E CAIXAS DO PDV (COM SÉRIES NFC-E)
+router.get('/caixas', protect, requirePermission('PDV_ACCESS'), listarCaixasPDV);
+router.post('/caixas', protect, requirePermission('PDV_ACCESS'), criarCaixaPDV);
+router.put('/caixas/:id', protect, requirePermission('PDV_ACCESS'), atualizarCaixaPDV);
+router.delete('/caixas/:id', protect, requirePermission('PDV_ACCESS'), excluirCaixaPDV);
+router.post('/caixas/:id/regerar-token', protect, requirePermission('PDV_ACCESS'), regerarTokenCaixaPDV);
+router.post('/caixas/disparar-carga', protect, requirePermission('PDV_ACCESS'), dispararCargaCaixasPDV);
+router.get('/caixas/carga-sync', obterCargaSyncCaixa);
+router.post('/caixas/vincular', vincularCaixaPDV);
+router.get('/caixas/mesas', obterMesasSync);
 
 
 // --- ACESSOS FINANCEIROS (Ações sensíveis no caixa) ---
