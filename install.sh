@@ -19,7 +19,7 @@ NC='\033[0m' # Sem Cor
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE_DIR"
 
-# Função para imprimir cabeçalhos
+# Funcao para imprimir cabecalhos
 header() {
     clear
     echo -e "${CYAN}==============================================================================${NC}"
@@ -41,7 +41,7 @@ get_compose_cmd() {
     fi
 }
 
-# Checa e instala pré-requisitos essenciais no Linux (Docker, Compose, Git, Curl)
+# Checa e instala pre-requisitos essenciais no Linux (Docker, Compose, Git, Curl)
 check_and_install_dependencies() {
     echo -e "\n${YELLOW}[+] Verificando dependencias do sistema...${NC}"
     
@@ -93,15 +93,17 @@ install_backend() {
 
     COMPOSE_CMD=$(get_compose_cmd)
 
-    # Cria pastas essenciais de persistência se não existirem
+    # Cria pastas essenciais de persistencia no host
     mkdir -p "$BASE_DIR/backend/uploads"
     mkdir -p "$BASE_DIR/backend/whatsapp_sessions"
     mkdir -p "$BASE_DIR/proxy/ssl"
     mkdir -p "$BASE_DIR/proxy/certbot/www"
     mkdir -p "$BASE_DIR/proxy/certbot/conf"
+    mkdir -p /var/www/certbot 2>/dev/null || true
+    mkdir -p /etc/letsencrypt 2>/dev/null || true
     mkdir -p "$BASE_DIR/backups"
 
-    # Configuração do .env do Backend
+    # Configuracao do .env do Backend
     if [ ! -f "$BASE_DIR/backend/.env" ]; then
         echo -e "${YELLOW}[+] Criando arquivo de ambiente 'backend/.env' a partir do modelo...${NC}"
         if [ -f "$BASE_DIR/backend/.env.example" ]; then
@@ -150,7 +152,16 @@ EOF
     echo -e "${WHITE}  • Nginx Proxy:${NC}       Ativo nas portas 80 e 443"
     echo -e "${WHITE}  • NFePHP/Composer:${NC}   Configurado e compilado no container backend"
     echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
-    read -p "Pressione [Enter] para voltar ao menu principal..."
+
+    echo -e "\n${YELLOW}[?] Deseja configurar os dominios no Nginx e instalar o Certificado SSL agora? [S/n]${NC}"
+    read -p "Opcao: " CFG_NGINX_NOW
+    CFG_NGINX_NOW=${CFG_NGINX_NOW:-S}
+    if [[ "$CFG_NGINX_NOW" =~ ^[Ss]$ ]]; then
+        configure_nginx_domains_ssl
+    else
+        echo -e "${BLUE}[i] Voce pode configurar dominios e SSL a qualquer momento pelo Menu (Opcao 7).${NC}"
+        read -p "Pressione [Enter] para voltar ao menu principal..."
+    fi
 }
 
 # 2. ATUALIZAR VERSAO DO BACKEND (GIT PULL + REBUILD + PRISMA DB PUSH)
@@ -165,76 +176,77 @@ update_backend() {
         return
     fi
 
-    # Backup de Segurança automático antes de atualizar
-    read -p "Deseja gerar um backup preventivo do banco MySQL antes de atualizar? [S/n]: " BACKUP_OPT
-    BACKUP_OPT=${BACKUP_OPT:-S}
-    if [[ "$BACKUP_OPT" =~ ^[Ss]$ ]]; then
+    # Backup de Seguranca Opcional
+    read -p "Deseja gerar um backup automatico do banco de dados antes da atualizacao? [S/n]: " DO_BACKUP
+    DO_BACKUP=${DO_BACKUP:-S}
+    if [[ "$DO_BACKUP" =~ ^[Ss]$ ]]; then
         make_backup_silent
     fi
 
-    echo -e "\n${YELLOW}[+] Puxando as atualizacoes mais recentes do Git (backend)...${NC}"
+    # Git Pull no Backend
     if [ -d "$BASE_DIR/backend/.git" ]; then
+        echo -e "\n${YELLOW}[+] Puxando as ultimas alteracoes do Git no Backend...${NC}"
         cd "$BASE_DIR/backend"
-        git fetch origin
-        CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-        echo -e "${BLUE}    Branch atual: $CURRENT_BRANCH${NC}"
-        git pull origin "$CURRENT_BRANCH"
+        git fetch --all
+        git pull origin main || git pull
         cd "$BASE_DIR"
+        echo -e "${GREEN}[✓] Codigo do Backend atualizado!${NC}"
     else
-        echo -e "${YELLOW}[!] O diretorio 'backend' nao e um repositorio Git direto.${NC}"
-        echo -e "${YELLOW}    Atualizando com os arquivos locais presentes.${NC}"
+        echo -e "${YELLOW}[!] A pasta 'backend' nao e um repositorio Git isolado. Pulando git pull.${NC}"
     fi
 
-    echo -e "\n${YELLOW}[+] Recompilando o container do Backend...${NC}"
+    echo -e "\n${YELLOW}[+] Reconstruindo imagem Docker do Backend com as novas atualizacoes...${NC}"
     $COMPOSE_CMD build backend
 
-    echo -e "\n${YELLOW}[+] Reiniciando o servico do Backend com a nova versao...${NC}"
+    echo -e "\n${YELLOW}[+] Reiniciando container do Backend...${NC}"
     $COMPOSE_CMD up -d --no-deps backend
 
-    echo -e "\n${YELLOW}[+] Aplicando sincronizacao do Prisma ORM no Banco de Dados...${NC}"
-    sleep 3
-    $COMPOSE_CMD exec -T backend npx prisma db push --schema=./src/prisma/schema.prisma || true
+    echo -e "\n${YELLOW}[+] Sincronizando schema do banco de dados com Prisma ORM...${NC}"
+    docker exec azun_backend npx prisma db push --accept-data-loss || true
 
-    echo -e "\n${GREEN}[✓] Backend atualizado com sucesso para a versao mais recente!${NC}"
-    echo -e "\n${YELLOW}[+] Ultimos logs do Backend:${NC}"
-    $COMPOSE_CMD logs --tail=20 backend
-
-    echo -e "\n${CYAN}------------------------------------------------------------------------------${NC}"
-    read -p "Pressione [Enter] para voltar ao menu..."
+    echo -e "\n${GREEN}==============================================================================${NC}"
+    echo -e "${GREEN}               [SUCESSO] BACKEND ATUALIZADO COM EXITO!                       ${NC}"
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "Logs recentes do backend:"
+    docker logs --tail 25 azun_backend
+    echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
+    read -p "Pressione [Enter] para continuar..."
 }
 
 # 3. INSTALAR / ATIVAR FRONTEND E ADMIN
 install_frontend() {
     header
-    echo -e "${WHITE}--- [3] INSTALAR / ATIVAR FRONTEND E ADMIN ---${NC}\n"
+    echo -e "${WHITE}--- [3] INSTALAR / ATIVAR FRONTEND E PAINEL ADMIN ---${NC}\n"
     COMPOSE_CMD=$(get_compose_cmd)
 
-    # 1. Verifica/Clona o Admin se necessário
-    if [ ! -d "$BASE_DIR/admin/.git" ] && [ ! -f "$BASE_DIR/admin/package.json" ]; then
-        echo -e "${YELLOW}[+] Repositorio do Admin nao encontrado. Clonando...${NC}"
+    # Clona repositorios se nao existirem
+    if [ ! -d "$BASE_DIR/admin" ]; then
+        echo -e "${YELLOW}[+] Clonando repositorio do Painel Admin...${NC}"
         git clone https://github.com/Rayan-Novik/admin.git "$BASE_DIR/admin" || {
-            echo -e "${RED}[!] Falha ao clonar admin. Verifique permissao do git.${NC}"
+            echo -e "${RED}[!] Nao foi possivel clonar o admin. Verifique o acesso ao GitHub.${NC}"
         }
     fi
 
-    # 2. Verifica/Clona o Frontend se necessário
-    if [ ! -d "$BASE_DIR/frontend/.git" ] && [ ! -f "$BASE_DIR/frontend/package.json" ]; then
-        echo -e "${YELLOW}[+] Repositorio do Frontend nao encontrado. Clonando...${NC}"
+    if [ ! -d "$BASE_DIR/frontend" ]; then
+        echo -e "${YELLOW}[+] Clonando repositorio do Frontend dos Clientes...${NC}"
         git clone https://github.com/Rayan-Novik/frontend.git "$BASE_DIR/frontend" || {
-            echo -e "${RED}[!] Falha ao clonar frontend. Verifique permissao do git.${NC}"
+            echo -e "${RED}[!] Nao foi possivel clonar o frontend. Verifique o acesso ao GitHub.${NC}"
         }
     fi
 
-    echo -e "\n${YELLOW}[+] Compilando e iniciando Admin e Frontend (Perfil Full)...${NC}"
+    echo -e "\n${YELLOW}[+] Construindo e Subindo Containers do Frontend e Admin...${NC}"
     $COMPOSE_CMD --profile full up -d --build admin-app frontend-app
 
-    echo -e "\n${YELLOW}[+] Recarregando o Nginx Proxy para rotear o Frontend e Admin...${NC}"
-    $COMPOSE_CMD exec -T proxy nginx -s reload || $COMPOSE_CMD restart proxy
+    echo -e "\n${YELLOW}[+] Recarregando configuracoes do Proxy Nginx...${NC}"
+    $COMPOSE_CMD restart proxy
 
-    echo -e "\n${GREEN}[✓] Frontend e Admin iniciados e integrados ao Proxy com sucesso!${NC}"
-    $COMPOSE_CMD ps
-    echo -e "\n${CYAN}------------------------------------------------------------------------------${NC}"
-    read -p "Pressione [Enter] para voltar ao menu..."
+    echo -e "\n${GREEN}==============================================================================${NC}"
+    echo -e "${GREEN}          [SUCESSO] FRONTEND E ADMIN INSTALADOS E OPERACIONAIS!              ${NC}"
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "${WHITE}  • Admin Frontend:${NC}    Container ativo e roteado no proxy"
+    echo -e "${WHITE}  • Loja Frontend:${NC}     Container ativo e roteado no proxy"
+    echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
+    read -p "Pressione [Enter] para continuar..."
 }
 
 # 4. ATUALIZAR FRONTEND E ADMIN
@@ -244,59 +256,62 @@ update_frontend() {
     COMPOSE_CMD=$(get_compose_cmd)
 
     if [ -d "$BASE_DIR/admin/.git" ]; then
-        echo -e "${YELLOW}[+] Atualizando repositorio Admin...${NC}"
-        git -C "$BASE_DIR/admin" pull origin main || git -C "$BASE_DIR/admin" pull
+        echo -e "${YELLOW}[+] Puxando atualizacoes do Admin...${NC}"
+        cd "$BASE_DIR/admin" && git pull && cd "$BASE_DIR"
     fi
 
     if [ -d "$BASE_DIR/frontend/.git" ]; then
-        echo -e "${YELLOW}[+] Atualizando repositorio Frontend...${NC}"
-        git -C "$BASE_DIR/frontend" pull origin main || git -C "$BASE_DIR/frontend" pull
+        echo -e "${YELLOW}[+] Puxando atualizacoes do Frontend...${NC}"
+        cd "$BASE_DIR/frontend" && git pull && cd "$BASE_DIR"
     fi
 
-    echo -e "\n${YELLOW}[+] Recompilando e atualizando containers do Frontend e Admin...${NC}"
-    $COMPOSE_CMD --profile full up -d --build admin-app frontend-app
-    $COMPOSE_CMD exec -T proxy nginx -s reload || true
+    echo -e "\n${YELLOW}[+] Recompilando imagens web...${NC}"
+    $COMPOSE_CMD --profile full up -d --build --no-deps admin-app frontend-app
+    $COMPOSE_CMD restart proxy
 
     echo -e "\n${GREEN}[✓] Frontend e Admin atualizados com sucesso!${NC}"
-    read -p "Pressione [Enter] para voltar ao menu..."
+    read -p "Pressione [Enter] para continuar..."
 }
 
-# 5. VER STATUS E LOGS
+# 5. VER STATUS E LOGS EM TEMPO REAL
 view_logs() {
     header
-    echo -e "${WHITE}--- [5] STATUS E LOGS DOS SERVICOS ---${NC}\n"
+    echo -e "${WHITE}--- [5] STATUS E LOGS DOS SERVICOS AZUN ---${NC}\n"
     COMPOSE_CMD=$(get_compose_cmd)
 
-    echo -e "${CYAN}[Status Atual dos Containers]:${NC}"
+    echo -e "${YELLOW}Status dos Containers:${NC}"
     $COMPOSE_CMD ps
-    echo -e "\n${WHITE}Escolha o servico para visualizar os logs em tempo real (Ctrl+C para sair):${NC}"
-    echo -e "  [1] Todos os servicos"
-    echo -e "  [2] Apenas Backend API"
-    echo -e "  [3] Apenas Nginx Proxy"
-    echo -e "  [4] Apenas Banco MySQL"
-    echo -e "  [5] Apenas Admin / Frontend"
+    echo -e "\n${CYAN}------------------------------------------------------------------------------${NC}"
+    echo -e "Escolha o servico para ver logs em tempo real (Pressione Ctrl+C para sair dos logs):"
+    echo -e "  [1] Backend API"
+    echo -e "  [2] Proxy Nginx"
+    echo -e "  [3] Banco MySQL"
+    echo -e "  [4] Admin Frontend"
+    echo -e "  [5] Client Frontend"
+    echo -e "  [6] Todos os Servicos"
     echo -e "  [0] Voltar"
     read -p "Opcao: " LOG_OPT
 
     case $LOG_OPT in
-        1) $COMPOSE_CMD logs -f ;;
-        2) $COMPOSE_CMD logs -f backend ;;
-        3) $COMPOSE_CMD logs -f proxy ;;
-        4) $COMPOSE_CMD logs -f mysql ;;
-        5) $COMPOSE_CMD logs -f admin-app frontend-app ;;
+        1) docker logs -f --tail 100 azun_backend ;;
+        2) docker logs -f --tail 100 azun_proxy ;;
+        3) docker logs -f --tail 100 azun_mysql ;;
+        4) docker logs -f --tail 100 azun_admin_frontend 2>/dev/null || echo "Admin nao iniciado" ;;
+        5) docker logs -f --tail 100 azun_client_frontend 2>/dev/null || echo "Frontend nao iniciado" ;;
+        6) $COMPOSE_CMD logs -f --tail 50 ;;
         *) return ;;
     esac
 }
 
-# 6. REINICIAR / PARAR / INICIAR
+# 6. GERENCIAR ESTADO (START / STOP / RESTART)
 manage_services() {
     header
     echo -e "${WHITE}--- [6] GERENCIAR ESTADO DOS SERVICOS ---${NC}\n"
     COMPOSE_CMD=$(get_compose_cmd)
 
-    echo -e "  [1] Reiniciar toda a aplicacao (Restart All)"
-    echo -e "  [2] Parar todos os servicos (Stop All)"
-    echo -e "  [3] Iniciar todos os servicos (Start All)"
+    echo -e "  [1] Reiniciar toda a aplicacao (Restart)"
+    echo -e "  [2] Parar todos os servicos (Stop/Down)"
+    echo -e "  [3] Iniciar todos os servicos (Up -d)"
     echo -e "  [4] Reiniciar apenas o Backend"
     echo -e "  [5] Reiniciar apenas o Proxy Nginx"
     echo -e "  [0] Voltar"
@@ -331,23 +346,537 @@ manage_services() {
     read -p "Pressione [Enter] para continuar..."
 }
 
-# BACKUP SILENCIOSO (Chamado antes de atualizações)
+# BACKUP SILENCIOSO (Chamado antes de atualizacoes)
 make_backup_silent() {
     mkdir -p "$BASE_DIR/backups"
     BACKUP_FILE="$BASE_DIR/backups/backup_auto_$(date +%Y%m%d_%H%M%S).sql.gz"
     echo -e "${YELLOW}[+] Gerando backup de seguranca em $BACKUP_FILE...${NC}"
     docker exec azun_mysql mysqldump -u root -pGd1700al@@ --single-transaction --quick ecommerce_db 2>/dev/null | gzip > "$BACKUP_FILE" || true
     if [ -f "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
-        echo -e "${GREEN}[✓] Backup preventivo salvo com sucesso (${BACKUP_FILE})!${NC}"
+        echo -e "${GREEN}[✓] Backup preventivo salvo com sucesso ($BACKUP_FILE)!${NC}"
     else
         echo -e "${YELLOW}[!] Nao foi possivel gerar backup previo (o container mysql pode estar desligado).${NC}"
     fi
 }
 
-# 7. FAZER BACKUP MANUAL DO BANCO DE DADOS
+# 7. CONFIGURAR NGINX, DOMINIOS E CERTIFICADO SSL (LET'S ENCRYPT)
+configure_nginx_domains_ssl() {
+    header
+    echo -e "${WHITE}--- [7] CONFIGURAR NGINX, DOMINIOS & CERTIFICADO SSL (LET'S ENCRYPT) ---${NC}\n"
+    COMPOSE_CMD=$(get_compose_cmd)
+
+    # Cria diretorios de seguranca no host
+    mkdir -p /var/www/certbot 2>/dev/null || true
+    mkdir -p /etc/letsencrypt 2>/dev/null || true
+    mkdir -p "$BASE_DIR/proxy/ssl"
+    mkdir -p "$BASE_DIR/proxy/certbot/www"
+    mkdir -p "$BASE_DIR/proxy/certbot/conf"
+
+    # Detectar IP publico da VPS
+    SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "SEU_IP_VPS")
+    echo -e "${BLUE}  • IP Publico detectado desta VPS:${NC} ${WHITE}${SERVER_IP}${NC}"
+    echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
+
+    echo -e "${YELLOW}Como deseja definir os dominios no Nginx?${NC}\n"
+    echo -e "  ${GREEN}[1]${NC} ${WHITE}Dominio Base com Subdominios Automaticos (Recomendado)${NC}"
+    echo -e "      Exemplo: voce informa 'meusistema.com' e o instalador configura:"
+    echo -e "        - API Backend:   api.meusistema.com"
+    echo -e "        - Painel Admin:  admin.meusistema.com"
+    echo -e "        - Loja/Frontend: meusistema.com"
+    echo -e ""
+    echo -e "  ${CYAN}[2]${NC} ${WHITE}Definir cada dominio manualmente (Personalizado)${NC}"
+    echo -e "      Voce digita a URL exata de cada servico"
+    echo -e ""
+    echo -e "  ${PURPLE}[3]${NC} ${WHITE}Apenas Backend / API (Ideal para VPS somente com backend)${NC}"
+    echo -e "      Exemplo: api.meusistema.com ou back.ararinhacloud.shop"
+    echo -e ""
+    echo -e "  ${WHITE}[0]${NC} Voltar ao menu principal"
+    echo -e ""
+    read -p "Selecione a opcao [1/2/3/0]: " DOM_OPT
+
+    case $DOM_OPT in
+        1)
+            echo ""
+            read -p "Digite seu dominio base (ex: meusistema.com.br): " RAW_BASE
+            BASE_DOMAIN=$(echo "$RAW_BASE" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            if [ -z "$BASE_DOMAIN" ]; then
+                echo -e "${RED}[X] Dominio base invalido.${NC}"
+                read -p "Pressione [Enter] para voltar..."
+                return
+            fi
+
+            DOMAIN_BACKEND="api.${BASE_DOMAIN}"
+            DOMAIN_ADMIN="admin.${BASE_DOMAIN}"
+            DOMAIN_FRONTEND="${BASE_DOMAIN}"
+
+            echo -e "\n${GREEN}[+] Dominios pre-configurados:${NC}"
+            echo -e "    • Backend API:   ${WHITE}$DOMAIN_BACKEND${NC}"
+            echo -e "    • Painel Admin:  ${WHITE}$DOMAIN_ADMIN${NC}"
+            echo -e "    • Loja/Frontend: ${WHITE}$DOMAIN_FRONTEND${NC}"
+
+            read -p "Deseja personalizar algum desses subdominios? [s/N]: " CUSTOMIZE_SUB
+            if [[ "$CUSTOMIZE_SUB" =~ ^[Ss]$ ]]; then
+                read -p "Dominio Backend API [$DOMAIN_BACKEND]: " NEW_BACK
+                [ -n "$NEW_BACK" ] && DOMAIN_BACKEND=$(echo "$NEW_BACK" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+                read -p "Dominio Painel Admin [$DOMAIN_ADMIN]: " NEW_ADMIN
+                [ -n "$NEW_ADMIN" ] && DOMAIN_ADMIN=$(echo "$NEW_ADMIN" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+                read -p "Dominio Loja/Frontend [$DOMAIN_FRONTEND]: " NEW_FRONT
+                [ -n "$NEW_FRONT" ] && DOMAIN_FRONTEND=$(echo "$NEW_FRONT" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            fi
+            ;;
+        2)
+            echo ""
+            read -p "Dominio do Backend / API (ex: api.meusistema.com): " IN_BACK
+            DOMAIN_BACKEND=$(echo "$IN_BACK" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            if [ -z "$DOMAIN_BACKEND" ]; then
+                echo -e "${RED}[X] O dominio do Backend e obrigatorio.${NC}"
+                read -p "Pressione [Enter] para voltar..."
+                return
+            fi
+
+            read -p "Dominio do Painel Admin (ex: admin.meusistema.com) [Opcional]: " IN_ADMIN
+            DOMAIN_ADMIN=$(echo "$IN_ADMIN" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            [ -z "$DOMAIN_ADMIN" ] && DOMAIN_ADMIN="admin.azun.com.br"
+
+            read -p "Dominio do Frontend / Loja (ex: meusistema.com) [Opcional]: " IN_FRONT
+            DOMAIN_FRONTEND=$(echo "$IN_FRONT" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            [ -z "$DOMAIN_FRONTEND" ] && DOMAIN_FRONTEND="_"
+            ;;
+        3)
+            echo ""
+            read -p "Dominio do Backend / API (ex: api.meusistema.com): " IN_BACK
+            DOMAIN_BACKEND=$(echo "$IN_BACK" | sed -e 's|^https*://||' -e 's|/.*||' | tr -d ' ')
+            if [ -z "$DOMAIN_BACKEND" ]; then
+                echo -e "${RED}[X] O dominio do Backend e obrigatorio.${NC}"
+                read -p "Pressione [Enter] para voltar..."
+                return
+            fi
+            DOMAIN_ADMIN="admin.azun.com.br"
+            DOMAIN_FRONTEND="_"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    PRIMARY_SSL_DOMAIN="$DOMAIN_BACKEND"
+
+    echo -e "\n${CYAN}------------------------------------------------------------------------------${NC}"
+    echo -e "${YELLOW}[+] Instalacao de Certificado SSL Gratuito (HTTPS / Let's Encrypt)${NC}"
+    echo -e "Para que o certificado seja emitido com sucesso:"
+    echo -e "Os dominios devem apontar o DNS (Registro Tipo A) para o IP: ${WHITE}$SERVER_IP${NC}\n"
+
+    read -p "Deseja emitir e instalar o Certificado SSL agora? [S/n]: " INSTALL_SSL
+    INSTALL_SSL=${INSTALL_SSL:-S}
+
+    CERT_INSTALLED=false
+
+    if [[ "$INSTALL_SSL" =~ ^[Ss]$ ]]; then
+        read -p "Digite seu e-mail para registro do Certificado Let's Encrypt: " SSL_EMAIL
+        while [ -z "$SSL_EMAIL" ]; do
+            read -p "E-mail obrigatorio para notificacoes SSL: " SSL_EMAIL
+        done
+
+        # Instala Certbot no host se ausente
+        if ! command -v certbot &>/dev/null; then
+            echo -e "\n${YELLOW}[+] Instalando pacote Certbot no sistema hospedeiro...${NC}"
+            if [ -f /etc/debian_version ]; then
+                apt-get update && apt-get install -y certbot
+            elif [ -f /etc/redhat-release ]; then
+                yum install -y epel-release 2>/dev/null || true
+                yum install -y certbot
+            fi
+        fi
+
+        # Monta lista de argumentos de dominios para certbot
+        CERTBOT_DOMAINS="-d $DOMAIN_BACKEND"
+        if [ "$DOMAIN_ADMIN" != "admin.azun.com.br" ] && [ -n "$DOMAIN_ADMIN" ]; then
+            CERTBOT_DOMAINS="$CERTBOT_DOMAINS -d $DOMAIN_ADMIN"
+        fi
+        if [ "$DOMAIN_FRONTEND" != "_" ] && [ -n "$DOMAIN_FRONTEND" ]; then
+            CERTBOT_DOMAINS="$CERTBOT_DOMAINS -d $DOMAIN_FRONTEND"
+        fi
+
+        echo -e "\n${YELLOW}[+] Solicitando certificado SSL para: ${WHITE}$CERTBOT_DOMAINS${NC}..."
+
+        # Garante que o proxy esta respondendo na porta 80 para o desafio webroot
+        $COMPOSE_CMD up -d proxy 2>/dev/null || true
+
+        # Metodo 1: Webroot (sem parar o proxy)
+        if certbot certonly --webroot -w /var/www/certbot $CERTBOT_DOMAINS --email "$SSL_EMAIL" --agree-tos --non-interactive --keep-until-expiring 2>/dev/null; then
+            echo -e "${GREEN}[✓] Certificado SSL emitido com sucesso via Webroot!${NC}"
+            CERT_INSTALLED=true
+        else
+            echo -e "${YELLOW}[!] Metodo Webroot falhou. Alternando para Standalone (parando proxy temporariamente)...${NC}"
+            $COMPOSE_CMD stop proxy 2>/dev/null || true
+            if certbot certonly --standalone $CERTBOT_DOMAINS --email "$SSL_EMAIL" --agree-tos --non-interactive --keep-until-expiring; then
+                echo -e "${GREEN}[✓] Certificado SSL emitido com sucesso via Standalone!${NC}"
+                CERT_INSTALLED=true
+            else
+                echo -e "${RED}[X] Falha ao emitir certificado SSL.${NC}"
+                echo -e "${RED}    Verifique se o DNS de $CERTBOT_DOMAINS ja aponta para o IP $SERVER_IP.${NC}"
+            fi
+            $COMPOSE_CMD start proxy 2>/dev/null || true
+        fi
+    fi
+
+    # 3. Gerar arquivo de configuracao do Nginx (proxy/nginx.conf)
+    echo -e "\n${YELLOW}[+] Gerando arquivo 'proxy/nginx.conf' otimizado...${NC}"
+    mkdir -p "$BASE_DIR/proxy"
+    [ -f "$BASE_DIR/proxy/nginx.conf" ] && cp "$BASE_DIR/proxy/nginx.conf" "$BASE_DIR/proxy/nginx.conf.bak_$(date +%Y%m%d_%H%M%S)"
+
+    # Verifica se os arquivos do certificado existem
+    CERT_FILE="/etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/fullchain.pem"
+    KEY_FILE="/etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/privkey.pem"
+
+    if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
+        echo -e "${GREEN}[+] Aplicando configuracao HTTPS com Certificados SSL ativos.${NC}"
+        
+        cat << NGINX_CONF_EOF > "$BASE_DIR/proxy/nginx.conf"
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    server_tokens off;
+
+    # Otimizacoes de Desempenho e Limite de Upload
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    client_max_body_size 50M;
+
+    # Compressao Gzip
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
+
+    # DNS Interno do Docker (Permite resolver containers dinamicamente)
+    resolver 127.0.0.11 valid=15s ipv6=off;
+
+    # ==============================================================================
+    # 1. REDIRECIONAMENTO HTTP -> HTTPS (PORTA 80)
+    # ==============================================================================
+    server {
+        listen 80;
+        server_name $DOMAIN_BACKEND $DOMAIN_ADMIN $DOMAIN_FRONTEND;
+
+        # Desafio Let's Encrypt para renovacao automatica
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }
+
+    # ==============================================================================
+    # 2. BACKEND / API (NODE.JS + PHP CLI + WEBSOCKETS) - HTTPS
+    # ==============================================================================
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name $DOMAIN_BACKEND;
+
+        ssl_certificate /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/privkey.pem;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL_BACK:10m;
+        ssl_session_timeout 1d;
+
+        location / {
+            set $backend_upstream http://backend:5000;
+            proxy_pass $backend_upstream;
+
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+
+            proxy_connect_timeout 15s;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+    }
+
+    # ==============================================================================
+    # 3. PAINEL ADMINISTRATIVO (ADMIN) - HTTPS
+    # ==============================================================================
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name $DOMAIN_ADMIN;
+
+        ssl_certificate /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/privkey.pem;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL_ADM:10m;
+        ssl_session_timeout 1d;
+
+        location / {
+            set $admin_upstream http://admin-app:80;
+            proxy_pass $admin_upstream;
+
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 120s;
+        }
+    }
+
+    # ==============================================================================
+    # 4. FRONTEND / CLIENTES / TENANTS - HTTPS
+    # ==============================================================================
+    server {
+        listen 443 ssl default_server;
+        http2 on;
+        server_name $DOMAIN_FRONTEND;
+
+        ssl_certificate /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/privkey.pem;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL_FRONT:10m;
+        ssl_session_timeout 1d;
+
+        location /api/public/render-og {
+            set $backend_upstream http://backend:5000;
+            proxy_pass $backend_upstream;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+
+        location / {
+            set $frontend_upstream http://frontend-app:80;
+            proxy_pass $frontend_upstream;
+
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 120s;
+        }
+    }
+}
+NGINX_CONF_EOF
+
+    else
+        echo -e "${YELLOW}[+] Aplicando configuracao HTTP padrao (Porta 80).${NC}"
+        
+        cat << NGINX_CONF_EOF > "$BASE_DIR/proxy/nginx.conf"
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    server_tokens off;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    client_max_body_size 50M;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
+
+    resolver 127.0.0.11 valid=15s ipv6=off;
+
+    # 1. ADMIN
+    server {
+        listen 80;
+        server_name $DOMAIN_ADMIN;
+
+        location / {
+            set $admin_upstream http://admin-app:80;
+            proxy_pass $admin_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 120s;
+        }
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+    }
+
+    # 2. BACKEND / API
+    server {
+        listen 80;
+        server_name $DOMAIN_BACKEND;
+
+        location / {
+            set $backend_upstream http://backend:5000;
+            proxy_pass $backend_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 15s;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+    }
+
+    # 3. FRONTEND / CLIENTES
+    server {
+        listen 80 default_server;
+        server_name $DOMAIN_FRONTEND;
+
+        location /api/public/render-og {
+            set $backend_upstream http://backend:5000;
+            proxy_pass $backend_upstream;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location / {
+            set $frontend_upstream http://frontend-app:80;
+            proxy_pass $frontend_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 120s;
+        }
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+    }
+}
+NGINX_CONF_EOF
+    fi
+
+    # 4. Atualizar variaveis de ambiente no backend/.env
+    PROTO="http"
+    if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
+        PROTO="https"
+    fi
+
+    if [ -f "$BASE_DIR/backend/.env" ]; then
+        echo -e "\n${YELLOW}[+] Sincronizando variaveis de ambiente em 'backend/.env'...${NC}"
+        
+        # BACKEND_URL
+        if grep -q "^BACKEND_URL=" "$BASE_DIR/backend/.env"; then
+            sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}|" "$BASE_DIR/backend/.env"
+        else
+            echo "BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}" >> "$BASE_DIR/backend/.env"
+        fi
+
+        # ADMIN_URL
+        if grep -q "^ADMIN_URL=" "$BASE_DIR/backend/.env"; then
+            sed -i "s|^ADMIN_URL=.*|ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}|" "$BASE_DIR/backend/.env"
+        else
+            echo "ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}" >> "$BASE_DIR/backend/.env"
+        fi
+
+        # FRONTEND_URL
+        if [ "$DOMAIN_FRONTEND" != "_" ]; then
+            if grep -q "^FRONTEND_URL=" "$BASE_DIR/backend/.env"; then
+                sed -i "s|^FRONTEND_URL=.*|FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}|" "$BASE_DIR/backend/.env"
+            else
+                echo "FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}" >> "$BASE_DIR/backend/.env"
+            fi
+        fi
+
+        echo -e "${GREEN}[✓] Arquivo 'backend/.env' atualizado com as novas URLs!${NC}"
+    fi
+
+    # 5. Reiniciar Proxy Nginx e Backend
+    echo -e "\n${YELLOW}[+] Aplicando e reiniciando Proxy Nginx e Backend...${NC}"
+    $COMPOSE_CMD restart proxy
+    $COMPOSE_CMD restart backend
+
+    # 6. Agendar renovacao automatica no Cron
+    if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
+        RENEW_CRON="/etc/cron.d/certbot-azun-renew"
+        echo -e "\n${YELLOW}[+] Agendando renovacao automatica do SSL em $RENEW_CRON...${NC}"
+        cat << 'CRON_EOF' > "$RENEW_CRON"
+0 3 * * * root certbot renew --quiet --deploy-hook "docker exec azun_proxy nginx -s reload 2>/dev/null || docker compose restart proxy 2>/dev/null || true"
+CRON_EOF
+        chmod 644 "$RENEW_CRON" 2>/dev/null || true
+        echo -e "${GREEN}[✓] Renovacao automatica ativada para rodar diariamente as 03:00!${NC}"
+    fi
+
+    echo -e "\n${GREEN}==============================================================================${NC}"
+    echo -e "${GREEN}       [SUCESSO] NGINX E DOMINIOS CONFIGURADOS COM EXCELENCIA!                ${NC}"
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "${WHITE}  • API Backend:${NC}       ${PROTO}://${DOMAIN_BACKEND}"
+    echo -e "${WHITE}  • Painel Admin:${NC}      ${PROTO}://${DOMAIN_ADMIN}"
+    echo -e "${WHITE}  • Loja / Frontend:${NC}   ${PROTO}://${DOMAIN_FRONTEND}"
+    if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
+        echo -e "${WHITE}  • Certificado SSL:${NC}   ${GREEN}ATIVO (HTTPS Seguro / Let's Encrypt)${NC}"
+        echo -e "${WHITE}  • Renovacao Cron:${NC}    Ativa (Certificados renovam automaticamente)"
+    else
+        echo -e "${WHITE}  • Certificado SSL:${NC}   ${YELLOW}HTTP Padrao (Porta 80)${NC}"
+    fi
+    echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
+    read -p "Pressione [Enter] para voltar ao menu principal..."
+}
+
+# 8. FAZER BACKUP MANUAL DO BANCO DE DADOS
 manual_backup() {
     header
-    echo -e "${WHITE}--- [7] FAZER BACKUP MANUAL DO BANCO DE DADOS MYSQL ---${NC}\n"
+    echo -e "${WHITE}--- [8] FAZER BACKUP MANUAL DO BANCO DE DADOS MYSQL ---${NC}\n"
     mkdir -p "$BASE_DIR/backups"
     BACKUP_FILE="$BASE_DIR/backups/backup_azun_$(date +%Y%m%d_%H%M%S).sql.gz"
 
@@ -366,10 +895,10 @@ manual_backup() {
     read -p "Pressione [Enter] para continuar..."
 }
 
-# 8. RESTAURAR BACKUP DO BANCO DE DADOS
+# 9. RESTAURAR BACKUP DO BANCO DE DADOS
 restore_backup() {
     header
-    echo -e "${WHITE}--- [8] RESTAURAR BACKUP DO BANCO DE DADOS MYSQL ---${NC}\n"
+    echo -e "${WHITE}--- [9] RESTAURAR BACKUP DO BANCO DE DADOS MYSQL ---${NC}\n"
     
     if [ ! -d "$BASE_DIR/backups" ] || [ -z "$(ls -A "$BASE_DIR/backups"/*.sql.gz 2>/dev/null)" ]; then
         echo -e "${RED}[!] Nenhum arquivo de backup (.sql.gz) encontrado na pasta '$BASE_DIR/backups'.${NC}"
@@ -404,41 +933,6 @@ restore_backup() {
     read -p "Pressione [Enter] para continuar..."
 }
 
-# 9. CERTIFICADO SSL GRATUITO (LET'S ENCRYPT / CERTBOT)
-setup_ssl() {
-    header
-    echo -e "${WHITE}--- [9] CONFIGURAR CERTIFICADO SSL GRATUITO (LET'S ENCRYPT) ---${NC}\n"
-    echo -e "${BLUE}Esta funcao configura SSL automatico para os seus dominios.${NC}"
-    echo -e "Certifique-se de que os seus dominios (ex: back.ararinhacloud.shop, admin.azun.com.br)"
-    echo -e "ja estao apontando o DNS (Tipo A) para o IP desta VPS!\n"
-
-    read -p "Deseja instalar o Certbot no sistema hospedeiro? [S/n]: " INSTALL_CERTBOT
-    INSTALL_CERTBOT=${INSTALL_CERTBOT:-S}
-
-    if [[ "$INSTALL_CERTBOT" =~ ^[Ss]$ ]]; then
-        if [ -f /etc/debian_version ]; then
-            apt-get update && apt-get install -y certbot
-        elif [ -f /etc/redhat-release ]; then
-            yum install -y certbot
-        fi
-    fi
-
-    read -p "Digite o dominio para gerar o certificado (ex: back.ararinhacloud.shop): " SSL_DOMAIN
-    read -p "Digite seu e-mail para notificacoes da Let's Encrypt: " SSL_EMAIL
-
-    if [ -n "$SSL_DOMAIN" ] && [ -n "$SSL_EMAIL" ]; then
-        echo -e "\n${YELLOW}[+] Solicitando certificado para $SSL_DOMAIN...${NC}"
-        certbot certonly --webroot -w "$BASE_DIR/proxy/certbot/www" -d "$SSL_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive || {
-            echo -e "${YELLOW}[!] Tentando modo standalone (parando o proxy temporariamente)...${NC}"
-            docker compose stop proxy
-            certbot certonly --standalone -d "$SSL_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive
-            docker compose start proxy
-        }
-        echo -e "${GREEN}[✓] Processo de certificado concluido!${NC}"
-    fi
-    read -p "Pressione [Enter] para voltar ao menu..."
-}
-
 # ==============================================================================
 # MENU PRINCIPAL INTERATIVO
 # ==============================================================================
@@ -455,9 +949,9 @@ while true; do
     echo -e "  ${BLUE}[5]${NC} Ver Status e Logs dos Servicos (Tempo Real)"
     echo -e "  ${YELLOW}[6]${NC} Gerenciar Estado (Reiniciar / Parar / Iniciar Servicos)"
     echo -e ""
-    echo -e "  ${CYAN}[7]${NC} Fazer Backup Manual do Banco de Dados MySQL"
-    echo -e "  ${RED}[8]${NC} Restaurar Backup do Banco de Dados MySQL"
-    echo -e "  ${GREEN}[9]${NC} Configurar Certificado SSL (Let's Encrypt)"
+    echo -e "  ${GREEN}[7]${NC} ${WHITE}Configurar Nginx (Dominios & Certificado SSL Let's Encrypt)${NC}"
+    echo -e "  ${CYAN}[8]${NC} Fazer Backup Manual do Banco de Dados MySQL"
+    echo -e "  ${RED}[9]${NC} Restaurar Backup do Banco de Dados MySQL"
     echo -e ""
     echo -e "  ${WHITE}[0]${NC} Sair"
     echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
@@ -470,9 +964,9 @@ while true; do
         4) update_frontend ;;
         5) view_logs ;;
         6) manage_services ;;
-        7) manual_backup ;;
-        8) restore_backup ;;
-        9) setup_ssl ;;
+        7) configure_nginx_domains_ssl ;;
+        8) manual_backup ;;
+        9) restore_backup ;;
         0) 
             echo -e "\n${GREEN}[✓] Saindo do instalador. O sistema continua rodando em background no Docker.${NC}\n"
             exit 0 
