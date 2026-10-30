@@ -1,49 +1,127 @@
-version: '3.8'
 services:
-  # 1. O SEU BANCO DE DADOS
+  # ==============================================================================
+  # 1. BANCO DE DADOS RELACIONAL MYSQL 8.0
+  # ==============================================================================
   mysql:
     image: mysql:8.0
-    container_name: ararinha_mysql
+    container_name: azun_mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: Gd1700al@@
-      MYSQL_DATABASE: ecommerce_db
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Gd1700al@@}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ecommerce_db}
     ports:
-      - "3307:3306" # 🟢 MUDAMOS PARA 3307 PARA EVITAR CONFLITO COM HOST
+      - "127.0.0.1:3307:3306" # Blindado no localhost para impedir invasoes externas
     volumes:
       - mysql_data:/var/lib/mysql
+    networks:
+      - azun_network
     healthcheck:
-        test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-psenha"]
-        interval: 10s
-        timeout: 5s
-        retries: 10
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-Gd1700al@@}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
-  # 2. O SEU PAINEL PHP MY ADMIN
+  # ==============================================================================
+  # 2. GERENCIADOR DO BANCO (PHPMYADMIN) - ACESSO EM 127.0.0.1:8081
+  # ==============================================================================
   phpmyadmin:
     image: phpmyadmin/phpmyadmin
-    container_name: ararinha_phpmyadmin
+    container_name: azun_phpmyadmin
     restart: always
     ports:
-      - "8081:80" # 🟢 MUDAMOS PARA 8081 PORQUE A 8080 ESTÁ NO WUZAPI
+      - "127.0.0.1:8081:80"
     environment:
       PMA_HOST: mysql
       PMA_USER: root
-      PMA_PASSWORD: Gd1700al@@
+      PMA_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Gd1700al@@}
     depends_on:
       - mysql
+    networks:
+      - azun_network
 
-  # 3. A SUA API BACKEND
+  # ==============================================================================
+  # 3. API BACKEND (NODE.JS 20 + EMISSOR FISCAL PHP + PRISMA + COMPOSER)
+  # ==============================================================================
   backend:
-    build: .
-    container_name: ararinha_backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: azun_backend
     restart: always
     ports:
-      - "5005:5000" # 🟢 MUDAMOS A PORTA EXTERNA PARA 5005 POR SEGURANÇA
+      - "127.0.0.1:5005:5000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=mysql://root:${MYSQL_ROOT_PASSWORD:-Gd1700al@@}@mysql:3306/${MYSQL_DATABASE:-ecommerce_db}
+    env_file:
+      - ./.env
     depends_on:
       mysql:
-        condition: service_healthy 
-    env_file:
-      - .env
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+      - ./whatsapp_sessions:/app/whatsapp_sessions
+    networks:
+      - azun_network
+
+  # ==============================================================================
+  # 4. PROXY NGINX REVERSO (ROTEADOR DE DOMINIOS E SSL HTTPS)
+  # ==============================================================================
+  proxy:
+    image: nginx:alpine
+    container_name: azun_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./proxy/ssl:/etc/nginx/ssl:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./proxy/certbot/www:/var/www/certbot-local:ro
+      - ./proxy/certbot/conf:/etc/letsencrypt-local:ro
+    depends_on:
+      - backend
+    networks:
+      - azun_network
+
+  # ==============================================================================
+  # 5. FRONTEND ADMIN (PAINEL DO LOJISTA) - PERFIL "frontend" / "full"
+  # ==============================================================================
+  admin-app:
+    profiles: ["frontend", "full"]
+    build:
+      context: ../admin
+      dockerfile: Dockerfile
+    container_name: azun_admin_frontend
+    restart: always
+    expose:
+      - "80"
+    networks:
+      - azun_network
+
+  # ==============================================================================
+  # 6. FRONTEND CLIENTES / LOJA - PERFIL "frontend" / "full"
+  # ==============================================================================
+  frontend-app:
+    profiles: ["frontend", "full"]
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: azun_client_frontend
+    restart: always
+    expose:
+      - "80"
+    networks:
+      - azun_network
+
+networks:
+  azun_network:
+    name: azun_network
+    driver: bridge
 
 volumes:
   mysql_data:
+    name: azun_mysql_data

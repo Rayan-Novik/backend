@@ -19,25 +19,44 @@ NC='\033[0m' # Sem Cor
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE_DIR"
 
+# Detecta inteligentemente se estamos dentro de backend/ ou na raiz do projeto
+if [ -f "$BASE_DIR/package.json" ] && [ -d "$BASE_DIR/src" ]; then
+    BACKEND_DIR="$BASE_DIR"
+    PROXY_DIR="$BASE_DIR/proxy"
+    COMPOSE_FILE="$BASE_DIR/docker-compose.yml"
+else
+    BACKEND_DIR="$BASE_DIR/backend"
+    PROXY_DIR="$BASE_DIR/proxy"
+    COMPOSE_FILE="$BASE_DIR/docker-compose.yml"
+fi
+
 # Funcao para imprimir cabecalhos
 header() {
     clear
     echo -e "${CYAN}==============================================================================${NC}"
     echo -e "${WHITE}           AZUN TECNOLOGIA & GESTAO - GERENCIADOR E INSTALADOR VPS            ${NC}"
     echo -e "${CYAN}==============================================================================${NC}"
-    echo -e "${BLUE} Diretorio:${NC} $BASE_DIR"
-    echo -e "${BLUE} Servidor:${NC} $(hostname) | Kernel: $(uname -r)"
+    echo -e "${BLUE} Diretorio Base:${NC} $BASE_DIR"
+    echo -e "${BLUE} Backend:${NC}        $BACKEND_DIR"
+    echo -e "${BLUE} Proxy Nginx:${NC}    $PROXY_DIR"
+    echo -e "${BLUE} Compose File:${NC}   $COMPOSE_FILE"
+    echo -e "${BLUE} Servidor:${NC}       $(hostname) | Kernel: $(uname -r)"
     echo -e "${CYAN}------------------------------------------------------------------------------${NC}"
 }
 
 # Verifica se o comando docker compose existe (moderno ou plugin)
 get_compose_cmd() {
+    local cmd=""
     if docker compose version >/dev/null 2>&1; then
-        echo "docker compose"
+        cmd="docker compose"
     elif docker-compose version >/dev/null 2>&1; then
-        echo "docker-compose"
+        cmd="docker-compose"
+    fi
+
+    if [ -n "$cmd" ] && [ -f "$COMPOSE_FILE" ]; then
+        echo "$cmd -f $COMPOSE_FILE"
     else
-        echo ""
+        echo "$cmd"
     fi
 }
 
@@ -94,23 +113,23 @@ install_backend() {
     COMPOSE_CMD=$(get_compose_cmd)
 
     # Cria pastas essenciais de persistencia no host
-    mkdir -p "$BASE_DIR/backend/uploads"
-    mkdir -p "$BASE_DIR/backend/whatsapp_sessions"
-    mkdir -p "$BASE_DIR/proxy/ssl"
-    mkdir -p "$BASE_DIR/proxy/certbot/www"
-    mkdir -p "$BASE_DIR/proxy/certbot/conf"
+    mkdir -p "$BACKEND_DIR/uploads"
+    mkdir -p "$BACKEND_DIR/whatsapp_sessions"
+    mkdir -p "$PROXY_DIR/ssl"
+    mkdir -p "$PROXY_DIR/certbot/www"
+    mkdir -p "$PROXY_DIR/certbot/conf"
     mkdir -p /var/www/certbot 2>/dev/null || true
     mkdir -p /etc/letsencrypt 2>/dev/null || true
     mkdir -p "$BASE_DIR/backups"
 
     # Configuracao do .env do Backend
-    if [ ! -f "$BASE_DIR/backend/.env" ]; then
+    if [ ! -f "$BACKEND_DIR/.env" ]; then
         echo -e "${YELLOW}[+] Criando arquivo de ambiente 'backend/.env' a partir do modelo...${NC}"
-        if [ -f "$BASE_DIR/backend/.env.example" ]; then
-            cp "$BASE_DIR/backend/.env.example" "$BASE_DIR/backend/.env"
+        if [ -f "$BACKEND_DIR/.env.example" ]; then
+            cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
         else
             echo -e "${RED}[X] 'backend/.env.example' nao encontrado. Criando base padrao...${NC}"
-            cat << 'EOF' > "$BASE_DIR/backend/.env"
+            cat << 'EOF' > "$BACKEND_DIR/.env"
 SERVER_PORT=5000
 FRONTEND_URL=https://ararinhacloud.shop
 ADMIN_URL=https://admin.azun.com.br
@@ -121,7 +140,7 @@ ENCRYPTION_KEY=3f9a7c2e5d8b1a6c4e7f2d9a3b5c8e1f
 ENCRYPTION_IV=6a3f9c2e7d4b1a8c
 EOF
         fi
-        echo -e "${GREEN}[✓] Arquivo 'backend/.env' configurado com sucesso!${NC}"
+        echo -e "${GREEN}[✓] Arquivo '$BACKEND_DIR/.env' configurado com sucesso!${NC}"
     fi
 
     echo -e "\n${YELLOW}[+] 1/3: Iniciando Banco de Dados MySQL 8.0...${NC}"
@@ -184,15 +203,15 @@ update_backend() {
     fi
 
     # Git Pull no Backend
-    if [ -d "$BASE_DIR/backend/.git" ]; then
+    if [ -d "$BACKEND_DIR/.git" ]; then
         echo -e "\n${YELLOW}[+] Puxando as ultimas alteracoes do Git no Backend...${NC}"
-        cd "$BASE_DIR/backend"
+        cd "$BACKEND_DIR"
         git fetch --all
         git pull origin main || git pull
         cd "$BASE_DIR"
         echo -e "${GREEN}[✓] Codigo do Backend atualizado!${NC}"
     else
-        echo -e "${YELLOW}[!] A pasta 'backend' nao e um repositorio Git isolado. Pulando git pull.${NC}"
+        echo -e "${YELLOW}[!] A pasta '$BACKEND_DIR' nao e um repositorio Git isolado. Pulando git pull.${NC}"
     fi
 
     echo -e "\n${YELLOW}[+] Reconstruindo imagem Docker do Backend com as novas atualizacoes...${NC}"
@@ -220,16 +239,19 @@ install_frontend() {
     COMPOSE_CMD=$(get_compose_cmd)
 
     # Clona repositorios se nao existirem
-    if [ ! -d "$BASE_DIR/admin" ]; then
+    ADMIN_PATH="$BASE_DIR/admin"
+    FRONTEND_PATH="$BASE_DIR/frontend"
+
+    if [ ! -d "$ADMIN_PATH" ]; then
         echo -e "${YELLOW}[+] Clonando repositorio do Painel Admin...${NC}"
-        git clone https://github.com/Rayan-Novik/admin.git "$BASE_DIR/admin" || {
+        git clone https://github.com/Rayan-Novik/admin.git "$ADMIN_PATH" || {
             echo -e "${RED}[!] Nao foi possivel clonar o admin. Verifique o acesso ao GitHub.${NC}"
         }
     fi
 
-    if [ ! -d "$BASE_DIR/frontend" ]; then
+    if [ ! -d "$FRONTEND_PATH" ]; then
         echo -e "${YELLOW}[+] Clonando repositorio do Frontend dos Clientes...${NC}"
-        git clone https://github.com/Rayan-Novik/frontend.git "$BASE_DIR/frontend" || {
+        git clone https://github.com/Rayan-Novik/frontend.git "$FRONTEND_PATH" || {
             echo -e "${RED}[!] Nao foi possivel clonar o frontend. Verifique o acesso ao GitHub.${NC}"
         }
     fi
@@ -368,9 +390,9 @@ configure_nginx_domains_ssl() {
     # Cria diretorios de seguranca no host
     mkdir -p /var/www/certbot 2>/dev/null || true
     mkdir -p /etc/letsencrypt 2>/dev/null || true
-    mkdir -p "$BASE_DIR/proxy/ssl"
-    mkdir -p "$BASE_DIR/proxy/certbot/www"
-    mkdir -p "$BASE_DIR/proxy/certbot/conf"
+    mkdir -p "$PROXY_DIR/ssl"
+    mkdir -p "$PROXY_DIR/certbot/www"
+    mkdir -p "$PROXY_DIR/certbot/conf"
 
     # Detectar IP publico da VPS
     SERVER_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "SEU_IP_VPS")
@@ -521,9 +543,9 @@ configure_nginx_domains_ssl() {
     fi
 
     # 3. Gerar arquivo de configuracao do Nginx (proxy/nginx.conf)
-    echo -e "\n${YELLOW}[+] Gerando arquivo 'proxy/nginx.conf' otimizado...${NC}"
-    mkdir -p "$BASE_DIR/proxy"
-    [ -f "$BASE_DIR/proxy/nginx.conf" ] && cp "$BASE_DIR/proxy/nginx.conf" "$BASE_DIR/proxy/nginx.conf.bak_$(date +%Y%m%d_%H%M%S)"
+    echo -e "\n${YELLOW}[+] Gerando arquivo '$PROXY_DIR/nginx.conf' otimizado...${NC}"
+    mkdir -p "$PROXY_DIR"
+    [ -f "$PROXY_DIR/nginx.conf" ] && cp "$PROXY_DIR/nginx.conf" "$PROXY_DIR/nginx.conf.bak_$(date +%Y%m%d_%H%M%S)"
 
     # Verifica se os arquivos do certificado existem
     CERT_FILE="/etc/letsencrypt/live/$PRIMARY_SSL_DOMAIN/fullchain.pem"
@@ -532,7 +554,7 @@ configure_nginx_domains_ssl() {
     if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
         echo -e "${GREEN}[+] Aplicando configuracao HTTPS com Certificados SSL ativos.${NC}"
         
-        cat << NGINX_CONF_EOF > "$BASE_DIR/proxy/nginx.conf"
+        cat << NGINX_CONF_EOF > "$PROXY_DIR/nginx.conf"
 worker_processes auto;
 
 events {
@@ -695,7 +717,7 @@ NGINX_CONF_EOF
     else
         echo -e "${YELLOW}[+] Aplicando configuracao HTTP padrao (Porta 80).${NC}"
         
-        cat << NGINX_CONF_EOF > "$BASE_DIR/proxy/nginx.conf"
+        cat << NGINX_CONF_EOF > "$PROXY_DIR/nginx.conf"
 worker_processes auto;
 
 events {
@@ -812,39 +834,39 @@ NGINX_CONF_EOF
         PROTO="https"
     fi
 
-    if [ -f "$BASE_DIR/backend/.env" ]; then
-        echo -e "\n${YELLOW}[+] Sincronizando variaveis de ambiente em 'backend/.env'...${NC}"
+    if [ -f "$BACKEND_DIR/.env" ]; then
+        echo -e "\n${YELLOW}[+] Sincronizando variaveis de ambiente em '$BACKEND_DIR/.env'...${NC}"
         
         # BACKEND_URL
-        if grep -q "^BACKEND_URL=" "$BASE_DIR/backend/.env"; then
-            sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}|" "$BASE_DIR/backend/.env"
+        if grep -q "^BACKEND_URL=" "$BACKEND_DIR/.env"; then
+            sed -i "s|^BACKEND_URL=.*|BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}|" "$BACKEND_DIR/.env"
         else
-            echo "BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}" >> "$BASE_DIR/backend/.env"
+            echo "BACKEND_URL=${PROTO}://${DOMAIN_BACKEND}" >> "$BACKEND_DIR/.env"
         fi
 
         # ADMIN_URL
-        if grep -q "^ADMIN_URL=" "$BASE_DIR/backend/.env"; then
-            sed -i "s|^ADMIN_URL=.*|ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}|" "$BASE_DIR/backend/.env"
+        if grep -q "^ADMIN_URL=" "$BACKEND_DIR/.env"; then
+            sed -i "s|^ADMIN_URL=.*|ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}|" "$BACKEND_DIR/.env"
         else
-            echo "ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}" >> "$BASE_DIR/backend/.env"
+            echo "ADMIN_URL=${PROTO}://${DOMAIN_ADMIN}" >> "$BACKEND_DIR/.env"
         fi
 
         # FRONTEND_URL
         if [ "$DOMAIN_FRONTEND" != "_" ]; then
-            if grep -q "^FRONTEND_URL=" "$BASE_DIR/backend/.env"; then
-                sed -i "s|^FRONTEND_URL=.*|FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}|" "$BASE_DIR/backend/.env"
+            if grep -q "^FRONTEND_URL=" "$BACKEND_DIR/.env"; then
+                sed -i "s|^FRONTEND_URL=.*|FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}|" "$BACKEND_DIR/.env"
             else
-                echo "FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}" >> "$BASE_DIR/backend/.env"
+                echo "FRONTEND_URL=${PROTO}://${DOMAIN_FRONTEND}" >> "$BACKEND_DIR/.env"
             fi
         fi
 
-        echo -e "${GREEN}[✓] Arquivo 'backend/.env' atualizado com as novas URLs!${NC}"
+        echo -e "${GREEN}[✓] Arquivo '$BACKEND_DIR/.env' atualizado com as novas URLs!${NC}"
     fi
 
     # 5. Reiniciar Proxy Nginx e Backend
     echo -e "\n${YELLOW}[+] Aplicando e reiniciando Proxy Nginx e Backend...${NC}"
+    $COMPOSE_CMD up -d --no-deps proxy backend
     $COMPOSE_CMD restart proxy
-    $COMPOSE_CMD restart backend
 
     # 6. Agendar renovacao automatica no Cron
     if [ "$CERT_INSTALLED" = true ] || [ -f "$CERT_FILE" ]; then
