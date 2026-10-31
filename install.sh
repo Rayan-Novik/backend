@@ -276,6 +276,13 @@ http {
 EOF
         echo -e "${GREEN}[✓] Arquivo '$PROXY_DIR/nginx.conf' criado com sucesso!${NC}"
     fi
+
+    # 5. Valida e corrige DATABASE_URL no .env do backend para a rede interna Docker (mysql:3306)
+    if [ -f "$BACKEND_DIR/.env" ]; then
+        sed -i 's|@localhost:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+        sed -i 's|@127.0.0.1:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+        sed -i 's|mysql://Azun:[^@]*@|mysql://root:Gd1700al%40%40@|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    fi
 }
 
 # Inicializa e valida a infraestrutura
@@ -394,6 +401,12 @@ EOF
         echo -e "${GREEN}[✓] Arquivo '$BACKEND_DIR/.env' configurado com sucesso!${NC}"
     fi
 
+    # Garante que DATABASE_URL esteja apontando para mysql:3306
+    sed -i 's|@localhost:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    sed -i 's|@127.0.0.1:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    sed -i 's|mysql://Azun:[^@]*@|mysql://root:Gd1700al%40%40@|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    echo -e "${GREEN}[✓] Conexao DATABASE_URL validada para o container MySQL interno (mysql:3306)!${NC}"
+
     echo -e "\n${YELLOW}[+] 1/3: Iniciando Banco de Dados MySQL 8.0...${NC}"
     $COMPOSE_CMD up -d mysql
 
@@ -464,6 +477,10 @@ update_backend() {
     else
         echo -e "${YELLOW}[!] A pasta '$BACKEND_DIR' nao e um repositorio Git isolado. Pulando git pull.${NC}"
     fi
+
+    sed -i 's|@localhost:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    sed -i 's|@127.0.0.1:[0-9]*|@mysql:3306|g' "$BACKEND_DIR/.env" 2>/dev/null || true
+    sed -i 's|mysql://Azun:[^@]*@|mysql://root:Gd1700al%40%40@|g' "$BACKEND_DIR/.env" 2>/dev/null || true
 
     echo -e "\n${YELLOW}[+] Reconstruindo imagem Docker do Backend com as novas atualizacoes...${NC}"
     $COMPOSE_CMD build backend

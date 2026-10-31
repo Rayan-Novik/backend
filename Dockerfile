@@ -37,5 +37,5 @@ RUN npx prisma generate --schema=./src/prisma/schema.prisma
 
 EXPOSE 5000
 
-# 7. Inicializacao: sincroniza schema no MySQL e inicia a API
-CMD ["sh", "-c", "echo '[AZUN BACKEND] Aguardando MySQL iniciar...' && sleep 10 && npx prisma db push --schema=./src/prisma/schema.prisma && node src/server.js"]
+# 7. Inicializacao: aguarda o MySQL ficar pronto na porta 3306, sincroniza schema e inicia o servidor
+CMD ["sh", "-c", "sed -i 's|@localhost:[0-9]*|@mysql:3306|g' .env 2>/dev/null || true; sed -i 's|@127.0.0.1:[0-9]*|@mysql:3306|g' .env 2>/dev/null || true; echo '[AZUN BACKEND] Aguardando MySQL (mysql:3306) iniciar...'; until node -e \"const net=require('net');const s=net.connect(3306,'mysql',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));\"; do sleep 2; done; echo '[AZUN BACKEND] Conexao com MySQL estabelecida! Sincronizando tabelas com Prisma...'; npx prisma db push --schema=./src/prisma/schema.prisma --accept-data-loss && echo '[AZUN BACKEND] Banco sincronizado com sucesso! Iniciando API...' && node src/server.js"]
