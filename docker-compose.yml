@@ -10,7 +10,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Gd1700al@@}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-ecommerce_db}
     ports:
-      - "127.0.0.1:3307:3306" # Blindado no localhost para impedir invasoes externas
+      - "127.0.0.1:3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -65,57 +65,8 @@ services:
     networks:
       - azun_network
 
-  # ==============================================================================
-  # 4. PROXY NGINX REVERSO (ROTEADOR DE DOMINIOS E SSL HTTPS)
-  # ==============================================================================
-  proxy:
-    image: nginx:alpine
-    container_name: azun_proxy
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./proxy/ssl:/etc/nginx/ssl:ro
-      - /var/www/certbot:/var/www/certbot:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      - ./proxy/certbot/www:/var/www/certbot-local:ro
-      - ./proxy/certbot/conf:/etc/letsencrypt-local:ro
-    depends_on:
-      - backend
-    networks:
-      - azun_network
-
-  # ==============================================================================
-  # 5. FRONTEND ADMIN (PAINEL DO LOJISTA) - PERFIL "frontend" / "full"
-  # ==============================================================================
-  admin-app:
-    profiles: ["frontend", "full"]
-    build:
-      context: ../admin
-      dockerfile: Dockerfile
-    container_name: azun_admin_frontend
-    restart: always
-    expose:
-      - "80"
-    networks:
-      - azun_network
-
-  # ==============================================================================
-  # 6. FRONTEND CLIENTES / LOJA - PERFIL "frontend" / "full"
-  # ==============================================================================
-  frontend-app:
-    profiles: ["frontend", "full"]
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
-    container_name: azun_client_frontend
-    restart: always
-    expose:
-      - "80"
-    networks:
-      - azun_network
+# NOTA: O servico 'proxy' (Nginx) e os frontends sao orquestrados exclusivamente
+# a partir da pasta raiz (/var/www/azun ou /www/azun) pelo docker-compose.yml principal.
 
 networks:
   azun_network:
