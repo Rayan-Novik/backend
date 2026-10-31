@@ -865,7 +865,7 @@ http {
         }
 
         location / {
-            return 301 https://$host$request_uri;
+            return 301 https://\$host\$request_uri;
         }
     }
 
@@ -887,15 +887,15 @@ http {
         ssl_session_timeout 1d;
 
         location / {
-            set $backend_upstream http://backend:5000;
-            proxy_pass $backend_upstream;
+            set \$backend_upstream http://backend:5000;
+            proxy_pass \$backend_upstream;
 
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
 
             proxy_connect_timeout 15s;
@@ -922,15 +922,15 @@ http {
         ssl_session_timeout 1d;
 
         location / {
-            set $admin_upstream http://admin-app:80;
-            proxy_pass $admin_upstream;
+            set \$admin_upstream http://admin-app:80;
+            proxy_pass \$admin_upstream;
 
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
 
             proxy_connect_timeout 10s;
@@ -956,24 +956,24 @@ http {
         ssl_session_timeout 1d;
 
         location /api/public/render-og {
-            set $backend_upstream http://backend:5000;
-            proxy_pass $backend_upstream;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            set \$backend_upstream http://backend:5000;
+            proxy_pass \$backend_upstream;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
         }
 
         location / {
-            set $frontend_upstream http://frontend-app:80;
-            proxy_pass $frontend_upstream;
+            set \$frontend_upstream http://frontend-app:80;
+            proxy_pass \$frontend_upstream;
 
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto https;
 
             proxy_connect_timeout 10s;
@@ -1018,15 +1018,15 @@ http {
         server_name $DOMAIN_ADMIN;
 
         location / {
-            set $admin_upstream http://admin-app:80;
-            proxy_pass $admin_upstream;
+            set \$admin_upstream http://admin-app:80;
+            proxy_pass \$admin_upstream;
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_connect_timeout 10s;
             proxy_read_timeout 120s;
         }
@@ -1042,15 +1042,15 @@ http {
         server_name $DOMAIN_BACKEND;
 
         location / {
-            set $backend_upstream http://backend:5000;
-            proxy_pass $backend_upstream;
+            set \$backend_upstream http://backend:5000;
+            proxy_pass \$backend_upstream;
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_connect_timeout 15s;
             proxy_read_timeout 300s;
             proxy_send_timeout 300s;
@@ -1067,24 +1067,24 @@ http {
         server_name $DOMAIN_FRONTEND;
 
         location /api/public/render-og {
-            set $backend_upstream http://backend:5000;
-            proxy_pass $backend_upstream;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            set \$backend_upstream http://backend:5000;
+            proxy_pass \$backend_upstream;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
         }
 
         location / {
-            set $frontend_upstream http://frontend-app:80;
-            proxy_pass $frontend_upstream;
+            set \$frontend_upstream http://frontend-app:80;
+            proxy_pass \$frontend_upstream;
             proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_connect_timeout 10s;
             proxy_read_timeout 120s;
         }
