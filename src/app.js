@@ -266,7 +266,8 @@ app.get(['/api/tenants/verify/:domain', '/tenants/verify/:domain'], async (req, 
 // 🚀 ROTA DA API PÚBLICA (Para integrações externas)
 // Bypassa o tenantResolver, usa o apiKeyAuth interno para achar a loja
 // =========================================================
-app.use(['/api/v1', '/v1'], globalLimiter, publicApiRoutes);
+app.use('/api/v1', globalLimiter, publicApiRoutes);
+app.use('/v1', globalLimiter, publicApiRoutes);
 
 // =========================================================
 // 🛠️ CORREÇÃO DE URL PARA DOMÍNIOS CUSTOMIZADOS
@@ -526,7 +527,8 @@ app.all(['/api/sync/catalogo', '/sync/catalogo'], obterCargaSyncCaixa);
 // ✅ ROTAS PRINCIPAIS SAAS (Painel e Loja Virtual)
 // =========================================================
 // APLICA O LIMITER AQUI. ELE VAI FILTRAR QUEM ENTRA E QUEM PASSA DIRETO.
-app.use(['/api', '/'], globalLimiter, tenantResolver, apiRoutes);
+app.use('/api', globalLimiter, tenantResolver, apiRoutes);
+app.use('/', globalLimiter, tenantResolver, apiRoutes);
 
 // --- TRATAMENTO DE ERROS ---
 app.use((req, res, next) => {
