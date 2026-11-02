@@ -180,7 +180,7 @@ app.get('/api', (req, res) => {
 });
 
 // --- ROTA DE SITEMAP DINÂMICO PARA SEO ---
-app.get('/api/sitemap.xml', async (req, res) => {
+app.get(['/api/sitemap.xml', '/sitemap.xml'], async (req, res) => {
     try {
         const tenants = await prisma.tenants.findMany({
             where: { ativo: true }, 
@@ -240,9 +240,9 @@ app.use('/uploads', (req, res, next) => {
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // Webhooks de Pagamento
-app.post('/api/webhooks/abacatepay', handleAbacateWebhook);
+app.post(['/api/webhooks/abacatepay', '/webhooks/abacatepay'], handleAbacateWebhook);
 
-app.get('/api/tenants/verify/:domain', async (req, res) => {
+app.get(['/api/tenants/verify/:domain', '/tenants/verify/:domain'], async (req, res) => {
     try {
         const domain = req.params.domain;
 
@@ -266,14 +266,14 @@ app.get('/api/tenants/verify/:domain', async (req, res) => {
 // 🚀 ROTA DA API PÚBLICA (Para integrações externas)
 // Bypassa o tenantResolver, usa o apiKeyAuth interno para achar a loja
 // =========================================================
-app.use('/api/v1', globalLimiter, publicApiRoutes);
+app.use(['/api/v1', '/v1'], globalLimiter, publicApiRoutes);
 
 // =========================================================
 // 🛠️ CORREÇÃO DE URL PARA DOMÍNIOS CUSTOMIZADOS
 // =========================================================
 app.use((req, res, next) => {
     // Se a requisição for para as configurações públicas, removemos o domínio para deixar só o slug
-    if (req.url.includes('/api/configuracoes/public/')) {
+    if (req.url.includes('/configuracoes/public/')) {
         req.url = req.url.replace(/\.azun\.com\.br/g, '')
                          .replace(/\.ararinhacloud\.shop/g, '');
     }
@@ -281,7 +281,7 @@ app.use((req, res, next) => {
 });
 
 // 🩺 Health Check direto do PDV Desktop
-app.all('/api/pdv/health', (req, res) => res.json({ status: 'OK', online: true, timestamp: new Date().toISOString() }));
+app.all(['/api/pdv/health', '/pdv/health'], (req, res) => res.json({ status: 'OK', online: true, timestamp: new Date().toISOString() }));
 
 // 📦 Recebimento de Vendas e Movimentações Offline do PDV Desktop
 app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
@@ -526,7 +526,7 @@ app.all(['/api/sync/catalogo', '/sync/catalogo'], obterCargaSyncCaixa);
 // ✅ ROTAS PRINCIPAIS SAAS (Painel e Loja Virtual)
 // =========================================================
 // APLICA O LIMITER AQUI. ELE VAI FILTRAR QUEM ENTRA E QUEM PASSA DIRETO.
-app.use('/api', globalLimiter, tenantResolver, apiRoutes);
+app.use(['/api', '/'], globalLimiter, tenantResolver, apiRoutes);
 
 // --- TRATAMENTO DE ERROS ---
 app.use((req, res, next) => {
