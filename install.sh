@@ -75,7 +75,7 @@ services:
     container_name: azun_phpmyadmin
     restart: always
     ports:
-      - "127.0.0.1:8081:80"
+      - "8081:80"
     environment:
       PMA_HOST: mysql
       PMA_USER: root
