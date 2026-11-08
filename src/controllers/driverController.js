@@ -47,18 +47,36 @@ export const driverLogin = async (req, res, next) => {
             return res.status(400).json({ message: 'E-mail e senha são obrigatórios.' });
         }
 
+        const emailClean = email.trim();
+
         // 1. Busca o funcionário pelo e-mail
-        const funcionario = await prisma.funcionarios.findFirst({
-            where: { email: email.trim(), ativo: true },
+        let funcionario = await prisma.funcionarios.findFirst({
+            where: { email: emailClean, ativo: true },
             include: { cargos: true, tenants: true }
         });
 
-        if (!funcionario) {
-            return res.status(404).json({ message: 'Entregador não encontrado ou cadastro inativo.' });
+        let loja = funcionario?.tenants;
+        let isOwnerAccount = false;
+
+        // Se não encontrou como funcionário OU se o hash é ponteiro de dono/admin
+        if (!funcionario || funcionario.hash_senha === 'dono_usa_tenant_para_logar' || funcionario.isAdmin || funcionario.role === 'ADMIN') {
+            const tenantCandidate = await prisma.tenants.findFirst({
+                where: { email: emailClean, ativo: true }
+            });
+            if (tenantCandidate) {
+                loja = tenantCandidate;
+                isOwnerAccount = true;
+            }
         }
 
-        const id_tenant = funcionario.id_tenant;
-        const loja = funcionario.tenants;
+        if (!funcionario && !loja) {
+            return res.status(404).json({ message: 'Entregador ou conta não encontrada.' });
+        }
+
+        const id_tenant = loja ? loja.id : funcionario.id_tenant;
+        if (!loja) {
+            loja = await prisma.tenants.findUnique({ where: { id: id_tenant } });
+        }
 
         if (!loja || !loja.ativo) {
             return res.status(403).json({ message: 'A loja vinculada a esta conta está inativa.' });
@@ -70,18 +88,37 @@ export const driverLogin = async (req, res, next) => {
         }
 
         // 2. Validação da Senha
-        const isMatch = await bcrypt.compare(senha, funcionario.hash_senha);
+        let isMatch = false;
+
+        // Se for funcionário e possuir hash bcrypt válido
+        if (funcionario && funcionario.hash_senha && funcionario.hash_senha.startsWith('$2')) {
+            isMatch = await bcrypt.compare(senha, funcionario.hash_senha);
+        }
+
+        // Se não bateu ou se for conta de dono/admin, valida contra o hash do tenant
+        if (!isMatch && loja && loja.hash_senha && loja.hash_senha.startsWith('$2')) {
+            const matchOwner = await bcrypt.compare(senha, loja.hash_senha);
+            if (matchOwner) {
+                isMatch = true;
+                isOwnerAccount = true;
+            }
+        }
+
         if (!isMatch) {
-            return res.status(401).json({ message: 'Senha incorreta.' });
+            return res.status(401).json({ message: 'E-mail ou senha incorretos.' });
         }
 
         // 3. 🔒 CHECAGEM DA PERMISSÃO DO APLICATIVO ANDROID (DRIVER_APP_ACCESS)
-        const permissoes = funcionario.cargos ? funcionario.cargos.permissoes : [];
-        const isMaster = funcionario.isAdmin || funcionario.role === 'ADMIN';
-        const hasDriverPermission = isMaster || permissoes.includes('DRIVER_APP_ACCESS');
+        const permissoes = funcionario?.cargos ? funcionario.cargos.permissoes : [];
+        const isMaster = isOwnerAccount || funcionario?.isAdmin || funcionario?.role === 'ADMIN';
+        const isEntregadorCargo = funcionario?.cargos?.nome?.toLowerCase()?.includes('entregador') ||
+                                  funcionario?.cargos?.nome?.toLowerCase()?.includes('motoboy') ||
+                                  funcionario?.cargos?.nome?.toLowerCase()?.includes('motorista');
+
+        const hasDriverPermission = isMaster || permissoes.includes('DRIVER_APP_ACCESS') || isEntregadorCargo;
 
         if (!hasDriverPermission) {
-            const cargoNome = funcionario.cargos?.nome || 'Sem Cargo';
+            const cargoNome = funcionario?.cargos?.nome || 'Sem Cargo';
             return res.status(403).json({
                 message: `Acesso negado: O cargo '${cargoNome}' não possui a permissão necessária para acessar o Aplicativo do Entregador (DRIVER_APP_ACCESS).`,
                 erro_permissao: true,
@@ -92,10 +129,25 @@ export const driverLogin = async (req, res, next) => {
 
         // 4. Gera nova sessão e token
         const novaSessaoToken = crypto.randomUUID();
-        await prisma.funcionarios.update({
-            where: { id_funcionario: funcionario.id_funcionario },
-            data: { sessao_token: novaSessaoToken }
-        });
+        
+        let tokenUserId = 'DONO';
+        if (funcionario) {
+            tokenUserId = funcionario.id_funcionario;
+            await prisma.funcionarios.update({
+                where: { id_funcionario: funcionario.id_funcionario },
+                data: { sessao_token: novaSessaoToken }
+            });
+        }
+
+        if (isOwnerAccount || !funcionario) {
+            await prisma.tenants.update({
+                where: { id: loja.id },
+                data: { sessao_token: novaSessaoToken }
+            });
+            if (!funcionario) {
+                tokenUserId = 'DONO';
+            }
+        }
 
         // 5. Coleta configurações de entrega atuais da loja
         const [distMode, payType, fixedFee, kmRate, baseFee, maxKm] = await Promise.all([
@@ -116,23 +168,23 @@ export const driverLogin = async (req, res, next) => {
             max_km: parseFloat(maxKm || 15)
         };
 
-        const token = generateToken(funcionario.id_funcionario, loja.id, novaSessaoToken);
+        const token = generateToken(tokenUserId, loja.id, novaSessaoToken);
 
         const lojaFisica = await prisma.lojas.findFirst({
             where: { id_tenant, ativo: true },
-            select: { id_loja: true, nome: true, latitude: true, longitude: true }
+            select: { id_loja: true, nome: true, latitude: true, longitude: true, telefone: true }
         });
 
         return res.json({
             success: true,
             token,
             driver: {
-                id_funcionario: funcionario.id_funcionario,
-                nome_completo: funcionario.nome_completo,
-                email: funcionario.email,
-                cargo: funcionario.cargos?.nome || 'Entregador',
-                imagem: funcionario.imagem || null,
-                permissoes
+                id_funcionario: funcionario ? funcionario.id_funcionario : 0,
+                nome_completo: funcionario ? funcionario.nome_completo : (loja.nome_fantasia || 'Proprietário'),
+                email: funcionario ? funcionario.email : loja.email,
+                cargo: isMaster ? 'Administrador / Dono' : (funcionario?.cargos?.nome || 'Entregador'),
+                imagem: funcionario?.imagem || loja.imagem || null,
+                permissoes: isMaster ? ['DRIVER_APP_ACCESS', 'ALL'] : permissoes
             },
             loja: {
                 id: loja.id,
@@ -155,8 +207,9 @@ export const driverLogin = async (req, res, next) => {
 export const getDriverFeed = async (req, res, next) => {
     try {
         const id_tenant = Number(req.tenantId);
-        const id_funcionario = Number(req.user.id_usuario);
-        const driverTrackingCode = `DRIVER_FUNC_${id_funcionario}`;
+        const isDono = req.user.id_usuario === 'DONO' || req.user.is_dono;
+        const id_funcionario = isDono ? 0 : Number(req.user.id_usuario);
+        const driverTrackingCode = id_funcionario ? `DRIVER_FUNC_${id_funcionario}` : `DRIVER_DONO_${id_tenant}`;
 
         // 1. Configurações de Logística da Loja e Origem Física
         const [distMode, payType, fixedFee, kmRate, baseFee, maxKm, lojaFisica, tenantData] = await Promise.all([
@@ -339,9 +392,10 @@ export const claimOrder = async (req, res, next) => {
     try {
         const id_pedido = Number(req.params.id);
         const id_tenant = Number(req.tenantId);
-        const id_funcionario = Number(req.user.id_usuario);
+        const isDono = req.user.id_usuario === 'DONO' || req.user.is_dono;
+        const id_funcionario = isDono ? 0 : Number(req.user.id_usuario);
         const driverName = req.user.nome_completo;
-        const driverTrackingCode = `DRIVER_FUNC_${id_funcionario}`;
+        const driverTrackingCode = id_funcionario ? `DRIVER_FUNC_${id_funcionario}` : `DRIVER_DONO_${id_tenant}`;
 
         // Verifica configuração
         const distMode = await ConfiguracaoModel.get('DELIVERY_DISTRIBUTION_MODE', id_tenant);
@@ -410,14 +464,15 @@ export const claimOrder = async (req, res, next) => {
 export const updateDriverGps = async (req, res, next) => {
     try {
         const id_tenant = Number(req.tenantId);
-        const id_funcionario = Number(req.user.id_usuario);
+        const isDono = req.user.id_usuario === 'DONO' || req.user.is_dono;
+        const id_funcionario = isDono ? 0 : Number(req.user.id_usuario);
         const { lat, lng } = req.body;
 
         if (!lat || !lng) {
             return res.status(400).json({ message: 'Coordenadas lat e lng são obrigatórias.' });
         }
 
-        const driverTrackingCode = `DRIVER_FUNC_${id_funcionario}`;
+        const driverTrackingCode = id_funcionario ? `DRIVER_FUNC_${id_funcionario}` : `DRIVER_DONO_${id_tenant}`;
 
         // Atualiza localização em todas as entregas ativas deste motorista
         await prisma.pedidos.updateMany({
@@ -455,14 +510,15 @@ export const completeDelivery = async (req, res, next) => {
     try {
         const id_pedido = Number(req.params.id);
         const id_tenant = Number(req.tenantId);
-        const id_funcionario = Number(req.user.id_usuario);
+        const isDono = req.user.id_usuario === 'DONO' || req.user.is_dono;
+        const id_funcionario = isDono ? 0 : Number(req.user.id_usuario);
         const { pin, paymentCollected } = req.body;
 
         if (!pin) {
             return res.status(400).json({ message: 'O PIN de 4 dígitos é obrigatório para confirmar a entrega.' });
         }
 
-        const driverTrackingCode = `DRIVER_FUNC_${id_funcionario}`;
+        const driverTrackingCode = id_funcionario ? `DRIVER_FUNC_${id_funcionario}` : `DRIVER_DONO_${id_tenant}`;
 
         const pedido = await prisma.pedidos.findFirst({
             where: {
