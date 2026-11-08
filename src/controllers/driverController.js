@@ -172,7 +172,7 @@ export const driverLogin = async (req, res, next) => {
 
         const lojaFisica = await prisma.lojas.findFirst({
             where: { id_tenant, ativo: true },
-            select: { id_loja: true, nome: true, latitude: true, longitude: true, telefone: true }
+            select: { id_loja: true, nome: true, latitude: true, longitude: true }
         });
 
         return res.json({
@@ -192,7 +192,7 @@ export const driverLogin = async (req, res, next) => {
                 slug: loja.slug,
                 latitude: lojaFisica?.latitude ? parseFloat(lojaFisica.latitude) : null,
                 longitude: lojaFisica?.longitude ? parseFloat(lojaFisica.longitude) : null,
-                telefone: lojaFisica?.telefone || loja.telefone_contato || null
+                telefone: loja.telefone_contato || null
             },
             config_logistica: configLogistica
         });
