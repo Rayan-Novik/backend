@@ -117,7 +117,9 @@ export function montarXmlNFe(nota, empresa, estabelecimento, destinatario, itens
     .up();
 
     const cstIbs = item.ibs_cst || '410';
-    const classTrib = item.cClassTrib || '410001';
+    const classTrib = (item.cClassTrib && item.cClassTrib !== 'null' && item.cClassTrib !== 'undefined' && /^\d{6}$/.test(String(item.cClassTrib).trim()))
+      ? String(item.cClassTrib).trim()
+      : (cstIbs === '410' ? '410001' : '000001');
     const ibsCbsRoot = impostoNode.ele('IBSCBS');
 
     if (cstIbs === '410' || cstIbs === '400') {

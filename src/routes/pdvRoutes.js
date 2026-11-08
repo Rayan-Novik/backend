@@ -21,7 +21,8 @@ import {
     dispararCargaCaixasPDV,
     obterCargaSyncCaixa,
     vincularCaixaPDV,
-    obterMesasSync
+    obterMesasSync,
+    cancelarVendaPDV
 } from '../controllers/vendaslocais/pdvController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
@@ -39,6 +40,7 @@ router.get('/status', protect, requirePermission('PDV_ACCESS'), getStatusCaixa);
 router.post('/abrir', protect, requirePermission('PDV_ACCESS'), abrirCaixa);
 router.post('/fechar', protect, requirePermission('PDV_ACCESS'), fecharCaixa);
 router.post('/venda', protect, requirePermission('PDV_ACCESS'), registrarVendaPDV);
+router.post('/venda/cancelar', protect, requirePermission('PDV_ACCESS'), cancelarVendaPDV);
 router.post('/venda/:id_pedido/emitir-fiscal', protect, requirePermission('PDV_ACCESS'), emitirNotaDeVendaPDV);
 router.get('/vendas', protect, requirePermission('PDV_ACCESS'), getHistoricoVendas);
 

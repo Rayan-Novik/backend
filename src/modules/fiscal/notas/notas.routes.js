@@ -32,7 +32,7 @@ notasRouter.post('/:id/corrigir-data', async (req, res) => {
     if (!nota) return res.status(404).json({ error: 'Nota não encontrada' });
 
     const { nova_data } = req.body;
-    const novaData = nova_data ? new Date(nova_data) : new Date(Date.now() - 5 * 60000);
+    const novaData = nova_data ? new Date(nova_data) : await getTrueDate();
 
     await prisma.fiscal_notas.update({
       where: { id },
@@ -878,13 +878,23 @@ notasRouter.post('/:id/corrigir-impostos', async (req, res) => {
   try {
     const { itens } = req.body;
     for (const item of itens) {
+      const cst = item.ibs_cst || '000';
+      const cClass = (item.cClassTrib && item.cClassTrib !== 'null' && item.cClassTrib !== 'undefined' && /^\d{6}$/.test(String(item.cClassTrib).trim()))
+        ? String(item.cClassTrib).trim()
+        : (cst === '410' ? '410001' : '000001');
+
       await prisma.fiscal_nota_itens.update({
         where: { id: item.id },
         data: {
           icms_cst_csosn: item.icms_cst_csosn,
-          ibs_cst: item.ibs_cst,
-          cbs_cst: item.ibs_cst,
-          cClassTrib: item.ibs_cst === '410' ? '410001' : (item.ibs_cst === '000' ? '000001' : null)
+          ncm: item.ncm,
+          cfop: item.cfop,
+          icms_aliquota: item.icms_aliquota !== undefined ? Number(item.icms_aliquota) : undefined,
+          pis_cst: item.pis_cst,
+          cofins_cst: item.cofins_cst,
+          ibs_cst: cst,
+          cbs_cst: cst,
+          cClassTrib: cClass
         }
       });
     }

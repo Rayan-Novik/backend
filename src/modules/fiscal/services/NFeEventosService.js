@@ -50,9 +50,24 @@ export class NFeEventosService {
       throw new Error(`Erro Evento SPED-NFE: ${resPHP.message}`);
     }
 
-    const cStat = resPHP.sefaz_response?.cStat || resPHP.sefaz_response?.retEvento?.infEvento?.cStat;
-    const xMotivo = resPHP.sefaz_response?.xMotivo || resPHP.sefaz_response?.retEvento?.infEvento?.xMotivo || 'Retorno Sefaz';
-    const protocolo = resPHP.sefaz_response?.retEvento?.infEvento?.nProt || resPHP.sefaz_response?.retEvento?.[0]?.infEvento?.nProt || null;
+    // Extrai os dados reais do evento retornado pela SEFAZ
+    // Atenção: A resposta envelope 'retEnvEvento' traz cStat=128 (Lote Processado).
+    // O status específico da homologação do evento (135, 155, etc.) vem dentro de retEvento.infEvento.
+    const infEvento = resPHP.sefaz_response?.retEvento?.infEvento 
+                   || resPHP.sefaz_response?.retEvento?.[0]?.infEvento 
+                   || resPHP.sefaz_response?.infEvento;
+
+    const cStatEvento = infEvento?.cStat || resPHP.sefaz_response?.cStat;
+    const xMotivoEvento = infEvento?.xMotivo || resPHP.sefaz_response?.xMotivo || 'Retorno Sefaz';
+    const protocoloEvento = infEvento?.nProt || resPHP.sefaz_response?.retEvento?.nProt || resPHP.sefaz_response?.nProt || null;
+
+    const isCanceladoSucesso = tipo_evento === 'CANCELAMENTO' && (
+      cStatEvento == 135 || // Evento registrado e vinculado a NF-e
+      cStatEvento == 155 || // Cancelamento de NF-e homologado fora de prazo
+      cStatEvento == 136 || // Evento registrado, mas não vinculado
+      cStatEvento == 101 || // Cancelamento homologado
+      cStatEvento == 218    // NF-e já está cancelada na base da SEFAZ
+    );
 
     if (tipo_evento === 'CANCELAMENTO' || tipo_evento === 'CC_E') {
       await prisma.fiscal_eventos.create({
@@ -62,18 +77,47 @@ export class NFeEventosService {
           tipo: tipo_evento,
           sequencial: payloadEvento.sequencial || 1,
           justificativa: payloadEvento.justificativa,
-          codigo_status_sefaz: cStat ? String(cStat) : null,
-          motivo_status_sefaz: String(xMotivo),
-          protocolo_sefaz: protocolo,
+          codigo_status_sefaz: cStatEvento ? String(cStatEvento) : null,
+          motivo_status_sefaz: String(xMotivoEvento),
+          protocolo_sefaz: protocoloEvento,
           payload_xml_retorno: JSON.stringify(resPHP.sefaz_response),
         }
       });
 
-      if (tipo_evento === 'CANCELAMENTO' && (cStat == 135 || cStat == 155)) {
+      if (isCanceladoSucesso) {
         await prisma.fiscal_notas.update({
           where: { id: nota.id },
-          data: { status: 'CANCELADA' }
+          data: { 
+            status: 'CANCELADA',
+            codigo_status_sefaz: cStatEvento ? String(cStatEvento) : undefined,
+            motivo_status_sefaz: String(xMotivoEvento)
+          }
         });
+
+        // Sincroniza tabela notas_fiscais caso haja vínculo por chave ou id_pedido
+        try {
+          if (nota.chave_acesso) {
+            await prisma.notas_fiscais.updateMany({
+              where: { chave_acesso: nota.chave_acesso },
+              data: {
+                status: 'CANCELADA',
+                motivo_status: String(xMotivoEvento).substring(0, 250)
+              }
+            });
+          }
+          if (nota.id_pedido) {
+            await prisma.notas_fiscais.updateMany({
+              where: { id_pedido: Number(nota.id_pedido) },
+              data: {
+                status: 'CANCELADA',
+                motivo_status: String(xMotivoEvento).substring(0, 250)
+              }
+            });
+          }
+        } catch (syncErr) {
+          console.warn('⚠️ Erro ao atualizar notas_fiscais em cancelamento:', syncErr.message);
+        }
+
         fiscalEvents.emit('onNotaCancelada', {
           nota_id: nota.id,
           tenant_id: String(tenant_id),
@@ -84,16 +128,17 @@ export class NFeEventosService {
           nota_id: nota.id,
           tenant_id: String(tenant_id),
           tipo: tipo_evento,
-          protocolo
+          protocolo: protocoloEvento
         });
       }
     }
 
     return {
-      success: (cStat == 135 || cStat == 155 || cStat == 102),
+      success: isCanceladoSucesso || (cStatEvento == 135 || cStatEvento == 136 || cStatEvento == 155 || cStatEvento == 102),
       sefaz_response: resPHP.sefaz_response,
-      cStat,
-      xMotivo
+      cStat: cStatEvento,
+      xMotivo: xMotivoEvento,
+      protocolo: protocoloEvento
     };
   }
 }

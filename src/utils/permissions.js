@@ -4,6 +4,13 @@ export const PERMISSIONS = {
     // VENDAS & PEDIDOS
     DASHBOARD_VIEW: 'Visualizar Dashboard Principal',
     PDV_ACCESS: 'Acessar Caixa/PDV',
+    PDV_MESAS: 'Operar Mesas & Comandas',
+    PDV_SALAO: 'Gerenciar Ambientes do Salão',
+    PDV_AGENDA: 'Visualizar e Operar Agenda',
+    PDV_VENDAS: 'Histórico de Vendas do Caixa',
+    PDV_CONFIG: 'Acessar Configurações do Caixa (F10)',
+    PDV_SANGRIA_SUPRIMENTO: 'Realizar Sangria e Suprimento',
+    PDV_CANCELAR_CUPOM: 'Cancelar Venda ou Cupom Fiscal',
     PEDIDOS_VIEW: 'Visualizar Pedidos Online',
     PEDIDOS_MANAGE: 'Despachar / Editar Status de Pedidos',
     CLIENTES_MANAGE: 'Gerenciar Clientes',

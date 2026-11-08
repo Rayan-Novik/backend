@@ -75,6 +75,78 @@ export class NFeService {
     });
     if (!nota) throw new Error('Nota não encontrada');
 
+    // Se a nota não tiver itens em fiscal_nota_itens, tenta reconstruir automaticamente a partir do pedido vinculado
+    if (!nota.itens || nota.itens.length === 0) {
+      if (nota.id_pedido) {
+        const pItens = await prisma.pedido_items.findMany({
+          where: { id_pedido: nota.id_pedido }
+        });
+
+        if (pItens.length > 0) {
+          const prodIds = pItens.map(p => p.id_produto).filter(Boolean);
+          const prodsDb = await prisma.produtos.findMany({
+            where: { id_produto: { in: prodIds } }
+          });
+
+          const novosItens = [];
+          for (let i = 0; i < pItens.length; i++) {
+            const pi = pItens[i];
+            const pDb = prodsDb.find(p => p.id_produto === pi.id_produto);
+            const qtd = Number(pi.quantidade || 1);
+            const vUnit = Number(pi.preco || 0);
+            const vTot = Number((qtd * vUnit).toFixed(2));
+            const ncmRaw = String(pDb?.ncm || pi.ncm || '19021900').replace(/\D/g, '');
+            const ncm = ncmRaw.length >= 8 ? ncmRaw.substring(0, 8) : '19021900';
+            const cest = pDb?.cest || pi.cest || null;
+            const origem = parseInt(pDb?.origem || '0', 10) || 0;
+
+            const itemCriado = await prisma.fiscal_nota_itens.create({
+              data: {
+                tenant_id: String(nota.tenant_id),
+                nota_id: nota.id,
+                numero_item: i + 1,
+                produto_id: String(pi.id_produto || i + 1),
+                codigo_produto: String(pi.id_produto || i + 1),
+                descricao_produto: pi.nome || pDb?.nome || 'Item sem descricao',
+                cfop: '5102',
+                ncm: ncm,
+                cest: cest,
+                origem: origem,
+                quantidade: qtd,
+                valor_unitario: vUnit,
+                valor_total: vTot,
+                valor_desconto: 0,
+                valor_frete: 0,
+                valor_seguro: 0,
+                valor_outras: 0,
+                icms_cst_csosn: '102',
+                icms_base: 0,
+                icms_aliquota: 0,
+                icms_valor: 0,
+                pis_cst: '49',
+                pis_base: 0,
+                pis_aliquota: 0,
+                pis_valor: 0,
+                cofins_cst: '49',
+                cofins_base: 0,
+                cofins_aliquota: 0,
+                cofins_valor: 0,
+                ibs_cst: '049',
+                cClassTrib: '000001',
+                cbs_cst: '049'
+              }
+            });
+            novosItens.push(itemCriado);
+          }
+          nota.itens = novosItens;
+        }
+      }
+    }
+
+    if (!nota.itens || nota.itens.length === 0) {
+      throw new Error('A nota fiscal não possui itens cadastrados para emissão. Adicione pelo menos um produto à nota antes de reenviar.');
+    }
+
     let estabelecimento = await prisma.fiscal_estabelecimentos.findUnique({
       where: { id: nota.estabelecimento_id },
       include: { certificados: { where: { ativo: true }, take: 1 } }
@@ -98,8 +170,8 @@ export class NFeService {
     if (!destinatario && cenario.modelo !== '65') throw new Error('Destinatário obrigatório para NF-e Modelo 55');
 
     const trueDate = await getTrueDate();
-    const diffHoras = (trueDate.getTime() - nota.data_emissao.getTime()) / 3600000;
-    if (diffHoras > 24 || diffHoras < 0) {
+    const diffMinutos = (trueDate.getTime() - nota.data_emissao.getTime()) / 60000;
+    if (String(cenario.modelo) === '65' || diffMinutos > 5 || diffMinutos < -1) {
       nota.data_emissao = trueDate;
       await prisma.fiscal_notas.update({ where: { id: nota.id }, data: { data_emissao: nota.data_emissao } });
     }
@@ -149,8 +221,24 @@ export class NFeService {
         ipi: { cst: it.ipi_cst, base: Number(it.ipi_base), aliquota: Number(it.ipi_aliquota), valor: Number(it.ipi_valor) },
         pis: { cst: it.pis_cst, base: Number(it.pis_base), aliquota: Number(it.pis_aliquota), valor: Number(it.pis_valor) },
         cofins: { cst: it.cofins_cst, base: Number(it.cofins_base), aliquota: Number(it.cofins_aliquota), valor: Number(it.cofins_valor) },
-        ibs: { cst: it.ibs_cst, cClassTrib: it.cClassTrib, base: Number(it.ibs_base), aliquota: Number(it.ibs_aliquota), valor: Number(it.ibs_valor) },
-        cbs: { cst: it.cbs_cst, cClassTrib: it.cClassTrib, base: Number(it.cbs_base), aliquota: Number(it.cbs_aliquota), valor: Number(it.cbs_valor) }
+        ibs: {
+          cst: it.ibs_cst,
+          cClassTrib: (it.cClassTrib && it.cClassTrib !== 'null' && it.cClassTrib !== 'undefined' && /^\d{6}$/.test(String(it.cClassTrib).trim()))
+            ? String(it.cClassTrib).trim()
+            : (it.ibs_cst === '410' ? '410001' : '000001'),
+          base: Number(it.ibs_base),
+          aliquota: Number(it.ibs_aliquota),
+          valor: Number(it.ibs_valor)
+        },
+        cbs: {
+          cst: it.cbs_cst,
+          cClassTrib: (it.cClassTrib && it.cClassTrib !== 'null' && it.cClassTrib !== 'undefined' && /^\d{6}$/.test(String(it.cClassTrib).trim()))
+            ? String(it.cClassTrib).trim()
+            : (it.cbs_cst === '410' ? '410001' : '000001'),
+          base: Number(it.cbs_base),
+          aliquota: Number(it.cbs_aliquota),
+          valor: Number(it.cbs_valor)
+        }
       }
     }));
 
@@ -527,7 +615,9 @@ export class NFeService {
             cbs_base: it.tributacao.cbs?.base || 0,
             cbs_aliquota: it.tributacao.cbs?.aliquota || 0,
             cbs_valor: it.tributacao.cbs?.valor || 0,
-            cClassTrib: it.tributacao.ibs?.cClassTrib
+            cClassTrib: (it.tributacao.ibs?.cClassTrib && it.tributacao.ibs?.cClassTrib !== 'null' && it.tributacao.ibs?.cClassTrib !== 'undefined' && /^\d{6}$/.test(String(it.tributacao.ibs.cClassTrib).trim()))
+              ? String(it.tributacao.ibs.cClassTrib).trim()
+              : (it.tributacao.ibs?.cst === '410' ? '410001' : '000001')
           }))
         }
       }

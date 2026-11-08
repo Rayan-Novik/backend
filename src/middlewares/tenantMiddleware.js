@@ -120,7 +120,8 @@ export const tenantResolver = async (req, res, next) => {
             '/api/sync/catalogo',
             '/sync/catalogo',
             '/fiscal',
-            '/tabelas-fiscais'
+            '/tabelas-fiscais',
+            '/driver'
         ];
         
         const isPublicRoute = rotasLivres.some(rota => req.originalUrl.includes(rota));

@@ -338,6 +338,14 @@ try {
         $nfe->taginfRespTec($stdRespTec);
 
         // ITENS
+        if (empty($payload['itens']) || !is_array($payload['itens'])) {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Nenhum item informado para a emissão da NF-e / NFC-e. A nota precisa ter pelo menos um produto.'
+            ]);
+            exit(1);
+        }
+
         foreach ($payload['itens'] as $idx => $item) {
             $stdDet = new \stdClass();
             $stdDet->item = $item['numero_item'];
@@ -401,12 +409,25 @@ try {
                 $nfe->tagCOFINS($stdCof);
               }
 
-            // Injeta IBS/CBS obrigatoriamente (NT 2024.002) mesmo que a regra tributária não tenha sido encontrada
+            // Injeta IBS/CBS obrigatoriamente (NT 2024.002) mesmo que a regra tributaria nao tenha sido encontrada
             if (true) {
                 $stdIBS = new \stdClass();
                 $stdIBS->item = $item['numero_item'];
-                $stdIBS->CST = !empty($item['tributacao']['ibs']['cst']) ? $item['tributacao']['ibs']['cst'] : '049';
-                $stdIBS->cClassTrib = !empty($item['tributacao']['ibs']['cClassTrib']) ? $item['tributacao']['ibs']['cClassTrib'] : '000001';
+
+                $cstIbs = !empty($item['tributacao']['ibs']['cst']) ? (string)$item['tributacao']['ibs']['cst'] : '049';
+                if ($cstIbs === 'null' || $cstIbs === 'undefined' || trim($cstIbs) === '') {
+                    $cstIbs = '049';
+                }
+                if (is_numeric($cstIbs) && strlen($cstIbs) < 3) {
+                    $cstIbs = str_pad($cstIbs, 3, '0', STR_PAD_LEFT);
+                }
+                $stdIBS->CST = $cstIbs;
+
+                $rawClass = $item['tributacao']['ibs']['cClassTrib'] ?? null;
+                if (empty($rawClass) || $rawClass === 'null' || $rawClass === 'undefined' || !preg_match('/^\d{6}$/', (string)$rawClass)) {
+                    $rawClass = ($stdIBS->CST === '410') ? '410001' : '000001';
+                }
+                $stdIBS->cClassTrib = (string)$rawClass;
                 
                 $vBC = $item['tributacao']['ibs']['base'] ?? 0;
                 $pIBS = $item['tributacao']['ibs']['aliquota'] ?? 0;
@@ -595,7 +616,8 @@ try {
             
             echo json_encode([
                 'status' => 'success',
-                'sefaz_response' => $stdResp
+                'sefaz_response' => $stdResp,
+                'xml_retorno' => $resp
             ]);
             exit(0);
         } catch (\Exception $e) {

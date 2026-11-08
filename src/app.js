@@ -358,6 +358,7 @@ app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
                             id_tenant: id_tenant,
                             id_usuario: consumidorPadrao.id_usuario,
                             id_caixa_pdv: caixaAberto ? caixaAberto.id_caixa : null,
+                            sync_id: item.registro_id || undefined,
                             preco_itens: totalLiquido,
                             preco_frete: 0,
                             preco_total: totalLiquido,
@@ -498,6 +499,115 @@ app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
                         }).catch(() => {});
                     }
                     console.log(`[SYNC DESKTOP] 💵 ${item.entidade} de R$ ${val} registrada no caixa aberto.`);
+                    processados.push(item.id);
+                } else if (item.entidade === 'CANCELAMENTO_NFC_E' || item.entidade === 'CANCELAMENTO') {
+                    let cancelData = item.payload;
+                    if (typeof cancelData === 'string') {
+                        try { cancelData = JSON.parse(cancelData); } catch (e) { cancelData = JSON.parse(cancelData.replace(/\\"/g, '"')); }
+                    }
+                    const vendaId = cancelData?.venda_id || cancelData?.registro_id || cancelData?.id;
+                    const motivo = cancelData?.motivo || cancelData?.justificativa || 'Cancelamento solicitado pelo PDV Desktop';
+                    console.log(`[SYNC DESKTOP] 🚫 Processando cancelamento de venda/nota: ${vendaId}`);
+
+                    let pedido = null;
+                    if (vendaId) {
+                        const idPedNum = Number(vendaId);
+                        if (!isNaN(idPedNum) && idPedNum > 0) {
+                            pedido = await prisma.pedidos.findFirst({
+                                where: { id_pedido: idPedNum, id_tenant }
+                            });
+                        }
+                        if (!pedido) {
+                            pedido = await prisma.pedidos.findFirst({
+                                where: { sync_id: String(vendaId), id_tenant }
+                            });
+                        }
+                    }
+
+                    if (pedido) {
+                        await prisma.pedidos.update({
+                            where: { id_pedido: pedido.id_pedido },
+                            data: {
+                                status_pagamento: 'CANCELADO',
+                                status_entrega: 'Cancelado'
+                            }
+                        });
+
+                        // Estorna estoque
+                        const itens = await prisma.pedido_items.findMany({ where: { id_pedido: pedido.id_pedido } });
+                        for (const it of itens) {
+                            if (it.id_produto) {
+                                await prisma.produtos.updateMany({
+                                    where: { id_produto: it.id_produto, id_tenant },
+                                    data: { estoque: { increment: Number(it.quantidade || 1) } }
+                                }).catch(() => {});
+                            }
+                        }
+
+                        // Estorna saldo do caixa aberto se houver
+                        if (caixaAberto && Number(pedido.preco_total) > 0) {
+                            await prisma.caixa_pdv.update({
+                                where: { id_caixa: caixaAberto.id_caixa },
+                                data: { saldo_sistema: { decrement: Number(pedido.preco_total) } }
+                            }).catch(() => {});
+                        }
+
+                        // Atualiza tabela notas_fiscais
+                        await prisma.notas_fiscais.updateMany({
+                            where: { id_pedido: pedido.id_pedido },
+                            data: { status: 'CANCELADA', motivo_status: String(motivo).substring(0, 250) }
+                        }).catch(() => {});
+                    }
+
+                    // Localiza e cancela nota na SEFAZ e em fiscal_notas
+                    let fiscalNota = null;
+                    if (pedido) {
+                        fiscalNota = await prisma.fiscal_notas.findFirst({
+                            where: { id_pedido: pedido.id_pedido, tenant_id: String(id_tenant) }
+                        });
+                    }
+                    if (!fiscalNota && vendaId) {
+                        fiscalNota = await prisma.fiscal_notas.findFirst({
+                            where: {
+                                tenant_id: String(id_tenant),
+                                OR: [
+                                    { chave_acesso: String(vendaId) },
+                                    { id: String(vendaId) }
+                                ]
+                            }
+                        });
+                    }
+
+                    if (fiscalNota) {
+                        if (fiscalNota.status === 'AUTORIZADA' && fiscalNota.chave_acesso && fiscalNota.protocolo_autorizacao) {
+                            try {
+                                const { NFeEventosService } = await import('./modules/fiscal/services/NFeEventosService.js');
+                                await NFeEventosService.processarEvento(
+                                    String(id_tenant),
+                                    fiscalNota.id,
+                                    'CANCELAMENTO',
+                                    {
+                                        chave_acesso: fiscalNota.chave_acesso,
+                                        protocolo_autorizacao: fiscalNota.protocolo_autorizacao,
+                                        justificativa: motivo.length >= 15 ? motivo : (motivo + ' - Cancelamento pelo PDV')
+                                    }
+                                );
+                                console.log(`[SYNC DESKTOP] 📜 Nota fiscal ${fiscalNota.numero} cancelada com sucesso na SEFAZ via sync!`);
+                            } catch (e) {
+                                console.warn('[SYNC DESKTOP] ⚠️ Falha ao cancelar nota na SEFAZ via sync:', e.message);
+                                await prisma.fiscal_notas.update({
+                                    where: { id: fiscalNota.id },
+                                    data: { status: 'CANCELADA', motivo_status_sefaz: `Cancelado pelo PDV: ${motivo}` }
+                                }).catch(() => {});
+                            }
+                        } else {
+                            await prisma.fiscal_notas.update({
+                                where: { id: fiscalNota.id },
+                                data: { status: 'CANCELADA', motivo_status_sefaz: `Cancelado pelo PDV: ${motivo}` }
+                            }).catch(() => {});
+                        }
+                    }
+
                     processados.push(item.id);
                 } else {
                     processados.push(item.id);

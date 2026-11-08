@@ -1662,8 +1662,40 @@ export const excluirCaixaPDV = async (req, res, next) => {
     }
 };
 
+const garantirTabelaCargasSync = async () => {
+    try {
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS pdv_cargas_sync (
+                id VARCHAR(100) NOT NULL PRIMARY KEY,
+                tenant_id VARCHAR(64) NOT NULL,
+                caixa_id VARCHAR(64) NOT NULL,
+                dados_json LONGTEXT NOT NULL,
+                versao BIGINT DEFAULT 1,
+                status VARCHAR(32) DEFAULT 'PENDENTE',
+                total_produtos INT DEFAULT 0,
+                total_categorias INT DEFAULT 0,
+                total_formas INT DEFAULT 0,
+                disparado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+                sincronizado_em DATETIME NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_caixa_tenant (caixa_id, tenant_id),
+                INDEX idx_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+        // Garante que a coluna versao seja BIGINT para comportar timestamps em milissegundos
+        await prisma.$executeRawUnsafe(`
+            ALTER TABLE pdv_cargas_sync MODIFY COLUMN versao BIGINT DEFAULT 1;
+        `).catch(() => {});
+    } catch (e) {
+        console.warn('[PDV] Aviso ao verificar tabela pdv_cargas_sync:', e.message);
+    }
+};
+
 export const dispararCargaCaixasPDV = async (req, res, next) => {
     try {
+        await garantirTabelaCargasSync();
+
         const id_tenant = req.tenantId;
         const tenantStr = String(id_tenant);
         const { caixas_ids = [], opcoes = {} } = req.body;
@@ -1832,11 +1864,28 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
             };
         });
 
+        // 5. Busca configurações visuais e identidade da loja (cores do CustomizerPage e Logo Principal)
+        const configsDb = await prisma.configuracoes.findMany({
+            where: {
+                id_tenant: Number(id_tenant),
+                chave: { in: ['HEADER_PRIMARY_COLOR', 'HEADER_SECONDARY_COLOR', 'LOGO_URL', 'FAVICON_URL', 'SITE_TITLE'] }
+            }
+        });
+        const aparenciaMap = {};
+        configsDb.forEach(c => { aparenciaMap[c.chave] = c.valor; });
+
         const pacoteSincronizacao = {
             gerado_em: new Date().toISOString(),
             versao: Date.now(),
             tenant_id: tenantStr,
             empresa: empresaFormatada,
+            aparencia: {
+                cor_primaria: aparenciaMap.HEADER_PRIMARY_COLOR || '#0284c7',
+                cor_secundaria: aparenciaMap.HEADER_SECONDARY_COLOR || '#0369a1',
+                logo_url: aparenciaMap.LOGO_URL || '',
+                favicon_url: aparenciaMap.FAVICON_URL || '',
+                titulo_site: aparenciaMap.SITE_TITLE || ''
+            },
             total_produtos: produtosFormatados.length,
             total_categorias: categoriasFormatadas.length,
             total_formas: formasFormatadas.length,
@@ -1892,6 +1941,7 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
 
 export const obterCargaSyncCaixa = async (req, res, next) => {
     try {
+        await garantirTabelaCargasSync();
         const token = req.query.token || req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'];
         const hwid = req.query.hwid || req.headers['x-hwid'] || req.body?.hwid;
         const computador = req.query.computador || req.headers['x-computador'] || req.body?.computador;
@@ -2058,6 +2108,111 @@ export const obterMesasSync = async (req, res, next) => {
         });
 
         res.json(mesasFormatadas);
+    } catch (err) {
+        next(err);
+    }
+};
+
+export const cancelarVendaPDV = async (req, res, next) => {
+    try {
+        const id_tenant = req.tenantId;
+        const tenantStr = String(id_tenant);
+        const { venda_id, id_pedido, motivo } = req.body;
+        const motivoCancel = motivo || 'Cancelamento solicitado pelo PDV Desktop';
+
+        let pedido = null;
+        const idPed = Number(id_pedido || venda_id);
+        if (!isNaN(idPed) && idPed > 0) {
+            pedido = await prisma.pedidos.findFirst({
+                where: { id_pedido: idPed, id_tenant: Number(id_tenant) }
+            });
+        }
+        if (!pedido && venda_id) {
+            pedido = await prisma.pedidos.findFirst({
+                where: { sync_id: String(venda_id), id_tenant: Number(id_tenant) }
+            });
+        }
+
+        if (pedido) {
+            await prisma.pedidos.update({
+                where: { id_pedido: pedido.id_pedido },
+                data: {
+                    status_pagamento: 'CANCELADO',
+                    status_entrega: 'Cancelado'
+                }
+            });
+
+            // Estorna produtos ao estoque
+            const itens = await prisma.pedido_items.findMany({ where: { id_pedido: pedido.id_pedido } });
+            for (const it of itens) {
+                if (it.id_produto) {
+                    await prisma.produtos.updateMany({
+                        where: { id_produto: it.id_produto, id_tenant: Number(id_tenant) },
+                        data: { estoque: { increment: Number(it.quantidade || 1) } }
+                    }).catch(() => {});
+                }
+            }
+
+            // Atualiza tabela notas_fiscais
+            await prisma.notas_fiscais.updateMany({
+                where: { id_pedido: pedido.id_pedido },
+                data: { status: 'CANCELADA', motivo_status: String(motivoCancel).substring(0, 250) }
+            }).catch(() => {});
+        }
+
+        // Localiza e cancela nota na SEFAZ e em fiscal_notas
+        let fiscalNota = null;
+        if (pedido) {
+            fiscalNota = await prisma.fiscal_notas.findFirst({
+                where: { id_pedido: pedido.id_pedido, tenant_id: tenantStr }
+            });
+        }
+        if (!fiscalNota && venda_id) {
+            fiscalNota = await prisma.fiscal_notas.findFirst({
+                where: {
+                    tenant_id: tenantStr,
+                    OR: [
+                        { chave_acesso: String(venda_id) },
+                        { id: String(venda_id) }
+                    ]
+                }
+            });
+        }
+
+        if (fiscalNota) {
+            if (fiscalNota.status === 'AUTORIZADA' && fiscalNota.chave_acesso && fiscalNota.protocolo_autorizacao) {
+                try {
+                    const { NFeEventosService } = await import('../../modules/fiscal/services/NFeEventosService.js');
+                    await NFeEventosService.processarEvento(
+                        tenantStr,
+                        fiscalNota.id,
+                        'CANCELAMENTO',
+                        {
+                            chave_acesso: fiscalNota.chave_acesso,
+                            protocolo_autorizacao: fiscalNota.protocolo_autorizacao,
+                            justificativa: motivoCancel.length >= 15 ? motivoCancel : (motivoCancel + ' - Cancelamento pelo PDV')
+                        }
+                    );
+                } catch (e) {
+                    console.warn('[PDV] Falha ao cancelar nota na SEFAZ:', e.message);
+                    await prisma.fiscal_notas.update({
+                        where: { id: fiscalNota.id },
+                        data: { status: 'CANCELADA', motivo_status_sefaz: `Cancelado pelo PDV: ${motivoCancel}` }
+                    }).catch(() => {});
+                }
+            } else {
+                await prisma.fiscal_notas.update({
+                    where: { id: fiscalNota.id },
+                    data: { status: 'CANCELADA', motivo_status_sefaz: `Cancelado pelo PDV: ${motivoCancel}` }
+                }).catch(() => {});
+            }
+        }
+
+        return res.json({
+            success: true,
+            message: "Venda e nota fiscal canceladas com sucesso no sistema!",
+            venda_id: venda_id || pedido?.id_pedido
+        });
     } catch (err) {
         next(err);
     }

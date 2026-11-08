@@ -91,6 +91,19 @@ const getCronExpression = (minutos) => {
 
 export const initCron = async (id_tenant) => {
     try {
+        // Se chamado sem id_tenant (boot inicial do servidor), inicializa todos os ativos
+        if (!id_tenant) {
+            const configs = await prisma.config_integracao.findMany({
+                where: { ativo: true }
+            });
+            for (const cfg of configs) {
+                if (cfg.id_tenant) {
+                    await initCron(cfg.id_tenant);
+                }
+            }
+            return;
+        }
+
         const config = await prisma.config_integracao.findFirst({
             where: { id_tenant: id_tenant }
         });

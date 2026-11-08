@@ -61,6 +61,7 @@ import impressoraRoutes from './impressoraRoutes.js';
 
 import fiscalRoutes from './fiscalRoutes.js';
 import tabelasFiscaisRoutes from './tabelasFiscaisRoutes.js';
+import driverRoutes from './driverRoutes.js';
 
 const router = express.Router();
 
@@ -127,6 +128,7 @@ router.use('/cargos', cargoRoutes);
 router.use('/ifood', ifoodRoutes);
 router.use('/agendamentos', agendamentoRoutes);
 router.use('/kanban', WhazingRoutes);
+router.use('/driver', driverRoutes);
 
 // 🟢 ROTA DA CONFIGURAÇÃO DO WHAZING/KANBAN
 router.use('/whazing-config', whazingConfigRoutes);

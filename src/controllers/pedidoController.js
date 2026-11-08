@@ -19,6 +19,7 @@ import { processarPagamento } from '../services/paymentFactory.js';
 import { analisarRisco } from '../services/antifraudService.js';
 import { registrarEntradaFinanceira, gerarRecebivelDePedido } from '../services/financialService.js';
 import { sendOrderOutForDeliveryEmail, sendOrderReadyForPickupEmail } from '../services/emailService.js';
+import { geocodeAddress } from '../services/geocodingService.js';
 import crypto from 'crypto';
 import axios from 'axios';
 import cron from 'node-cron';
@@ -775,36 +776,117 @@ export const getAllPedidos = async (req, res, next) => {
 export const updatePedidoParaEntregue = async (req, res, next) => {
     try {
         const id_pedido = Number(req.params.id);
-        const id_tenant = req.tenantId;
+        const id_tenant = Number(req.tenantId);
+        const { id_funcionario } = req.body;
         const pedido = await PedidoModel.findById(id_pedido, undefined, id_tenant);
 
         if (!pedido) return res.status(404).json({ message: 'Pedido não encontrado' });
 
-        const isLocalDelivery = true;
+        const pin = pedido.delivery_pin || Math.floor(1000 + Math.random() * 9000).toString();
+        const driverToken = pedido.driver_token || crypto.randomUUID();
+        const expires = new Date();
+        expires.setHours(expires.getHours() + 24);
 
-        if (isLocalDelivery) {
-            const pin = Math.floor(1000 + Math.random() * 9000).toString();
-            const driverToken = crypto.randomUUID();
-            const expires = new Date();
-            expires.setHours(expires.getHours() + 24);
+        let driverTrackingCode = pedido.codigo_rastreio;
+        let driverName = null;
 
-            await prisma.pedidos.updateMany({
-                where: { id_pedido: id_pedido, id_tenant: id_tenant },
-                data: { status_entrega: 'Em Rota de Entrega', delivery_pin: pin, driver_token: driverToken, driver_token_expires: expires }
+        if (id_funcionario) {
+            // Busca o colaborador e valida se pertence à loja e tem permissão DRIVER_APP_ACCESS
+            const func = await prisma.funcionarios.findFirst({
+                where: { id_funcionario: Number(id_funcionario), id_tenant, ativo: true },
+                include: { cargos: true }
             });
 
-            await notificarCliente(pedido, 'EM_ROTA', id_tenant);
-
-            return res.json({
-                message: 'Pedido em rota de entrega.', status_entrega: 'Em Rota de Entrega',
-                link_motorista: `${process.env.FRONTEND_URL}/driver/delivery/${driverToken}`, pin_cliente: pin
-            });
-        } else {
-            const pedidoAtualizado = await prisma.pedidos.updateMany({
-                where: { id_pedido: id_pedido, id_tenant: id_tenant }, data: { status_entrega: 'Enviado' }
-            });
-            return res.json(pedidoAtualizado);
+            if (func) {
+                const perms = func.cargos?.permissoes || [];
+                const hasPerm = func.isAdmin || func.role === 'ADMIN' || (Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS'));
+                if (!hasPerm) {
+                    return res.status(403).json({
+                        message: `O colaborador '${func.nome_completo}' pertence ao cargo '${func.cargos?.nome || 'Sem Cargo'}', que não possui a permissão necessária para o aplicativo de entregas (DRIVER_APP_ACCESS).`
+                    });
+                }
+                driverTrackingCode = `DRIVER_FUNC_${func.id_funcionario}`;
+                driverName = func.nome_completo;
+            } else {
+                return res.status(404).json({ message: 'Entregador selecionado não encontrado ou inativo.' });
+            }
         }
+
+        const updateData = {
+            status_entrega: 'Em Rota de Entrega',
+            delivery_pin: pin,
+            driver_token: driverToken,
+            driver_token_expires: expires
+        };
+
+        if (driverTrackingCode) {
+            updateData.codigo_rastreio = driverTrackingCode;
+        }
+        if (driverName) {
+            updateData.nome_atendente = `Entregador: ${driverName}`;
+        }
+
+        await prisma.pedidos.update({
+            where: { id_pedido },
+            data: updateData
+        });
+
+        // 🟢 Notifica via Socket.io em tempo real (Painel Admin e App do Entregador)
+        if (global.io) {
+            global.io.emit('pedido_atualizado', {
+                id_pedido,
+                status_entrega: 'Em Rota de Entrega',
+                id_funcionario: id_funcionario ? Number(id_funcionario) : null,
+                driverName
+            });
+            global.io.emit('order_claimed', {
+                id_pedido,
+                driverName: driverName || 'Entregador',
+                status_entrega: 'Em Rota de Entrega'
+            });
+        }
+
+        await notificarCliente(pedido, 'EM_ROTA', id_tenant);
+
+        return res.json({
+            success: true,
+            message: driverName 
+                ? `Pedido #${id_pedido} despachado com sucesso para ${driverName}!`
+                : `Pedido #${id_pedido} em rota de entrega.`,
+            status_entrega: 'Em Rota de Entrega',
+            driver_token: driverToken,
+            id_funcionario: id_funcionario ? Number(id_funcionario) : null,
+            entregador_nome: driverName,
+            link_motorista: `${process.env.FRONTEND_URL}/driver/delivery/${driverToken}`,
+            pin_cliente: pin
+        });
+    } catch (error) { next(error); }
+};
+
+// 🟢 LISTAR ENTREGADORES ELEGÍVEIS (CARGO COM DRIVER_APP_ACCESS)
+export const getEntregadoresDisponiveis = async (req, res, next) => {
+    try {
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+
+        const funcsRaw = await prisma.funcionarios.findMany({
+            where: { id_tenant, ativo: true },
+            include: { cargos: true },
+            orderBy: { nome_completo: 'asc' }
+        });
+
+        const entregadores = funcsRaw.filter(f => {
+            if (f.isAdmin || f.role === 'ADMIN' || f.cargos?.is_dono) return true;
+            const perms = f.cargos?.permissoes || [];
+            return Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS');
+        }).map(f => ({
+            id_funcionario: f.id_funcionario,
+            nome_completo: f.nome_completo,
+            email: f.email,
+            cargo: f.cargos?.nome || 'Entregador',
+            imagem: f.imagem || null
+        }));
+
+        res.json({ success: true, entregadores });
     } catch (error) { next(error); }
 };
 
@@ -974,6 +1056,316 @@ export const updateDriverLocation = async (req, res, next) => {
         }
         res.json({ success: true });
     } catch (error) { next(error); }
+};
+
+export const getEntregasRadar = async (req, res, next) => {
+    try {
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+
+        // 1. Dados da Loja (Origem das entregas)
+        const loja = await prisma.lojas.findFirst({
+            where: { id_tenant: id_tenant, ativo: true },
+            select: {
+                id_loja: true,
+                nome: true,
+                latitude: true,
+                longitude: true,
+                logradouro: true,
+                numero: true,
+                bairro: true,
+                cidade: true,
+                estado: true,
+                cep: true
+            }
+        });
+
+        // 2. Pedidos ativos no fluxo de entrega
+        const pedidos = await prisma.pedidos.findMany({
+            where: {
+                id_tenant: id_tenant,
+                deletado_em: null,
+                status_entrega: { in: ['Pendente', 'Em Preparo', 'Pronto para Retirada', 'Em Rota de Entrega'] }
+            },
+            include: {
+                usuarios: {
+                    select: {
+                        id_usuario: true,
+                        nome_completo: true,
+                        telefone_criptografado: true
+                    }
+                },
+                enderecos: {
+                    select: {
+                        id_endereco: true,
+                        logradouro: true,
+                        numero: true,
+                        complemento: true,
+                        bairro: true,
+                        cidade: true,
+                        estado: true,
+                        cep: true,
+                        latitude: true,
+                        longitude: true
+                    }
+                },
+                pedido_items: {
+                    select: {
+                        id_item: true,
+                        nome: true,
+                        quantidade: true,
+                        preco: true
+                    }
+                }
+            },
+            orderBy: {
+                data_pedido: 'desc'
+            }
+        });
+
+        // 3. Geocodifica automaticamente endereços que ainda não possuem coordenadas
+        await Promise.all(
+            pedidos.map(async (p) => {
+                const end = p.enderecos;
+                const semCoords = !end?.latitude || !end?.longitude;
+                if (semCoords && (end?.logradouro || p.entrega_logradouro)) {
+                    try {
+                        const coords = await geocodeAddress({
+                            logradouro: end?.logradouro || p.entrega_logradouro,
+                            numero: end?.numero || p.entrega_numero,
+                            bairro: end?.bairro || p.entrega_bairro,
+                            cidade: end?.cidade || p.entrega_cidade,
+                            estado: end?.estado || p.entrega_estado,
+                            cep: end?.cep || p.entrega_cep
+                        });
+
+                        if (coords?.latitude && coords?.longitude) {
+                            if (p.enderecos) {
+                                p.enderecos.latitude = coords.latitude;
+                                p.enderecos.longitude = coords.longitude;
+                            }
+                            if (end?.id_endereco) {
+                                prisma.enderecos.update({
+                                    where: { id_endereco: end.id_endereco },
+                                    data: { latitude: coords.latitude, longitude: coords.longitude }
+                                }).catch(() => {});
+                            }
+                        }
+                    } catch (e) {}
+                }
+            })
+        );
+
+        // Geocodifica a loja de origem se ainda não tiver latitude/longitude
+        if (loja && (!loja.latitude || !loja.longitude) && (loja.logradouro || loja.cep)) {
+            try {
+                const storeCoords = await geocodeAddress({
+                    logradouro: loja.logradouro,
+                    numero: loja.numero,
+                    bairro: loja.bairro,
+                    cidade: loja.cidade,
+                    estado: loja.estado,
+                    cep: loja.cep
+                });
+                if (storeCoords?.latitude && storeCoords?.longitude) {
+                    loja.latitude = storeCoords.latitude;
+                    loja.longitude = storeCoords.longitude;
+                    prisma.lojas.update({
+                        where: { id_loja: loja.id_loja },
+                        data: { latitude: storeCoords.latitude, longitude: storeCoords.longitude }
+                    }).catch(() => {});
+                }
+            } catch (e) {}
+        }
+
+        const pedidosFormatados = pedidos.map(p => {
+            let telefoneCliente = null;
+            if (p.usuarios?.telefone_criptografado) {
+                try {
+                    telefoneCliente = decrypt(p.usuarios.telefone_criptografado);
+                } catch (e) { }
+            }
+
+            const isOutForDelivery = p.status_entrega === 'Em Rota de Entrega';
+            const driverLink = p.driver_token ? `${process.env.FRONTEND_URL || ''}/driver/delivery/${p.driver_token}` : null;
+
+            return {
+                id_pedido: p.id_pedido,
+                data_pedido: p.data_pedido,
+                status_entrega: p.status_entrega,
+                status_pagamento: p.status_pagamento,
+                metodo_envio: p.metodo_envio,
+                metodo_pagamento: p.metodo_pagamento,
+                valor_total: p.preco_total ? parseFloat(p.preco_total) : 0,
+                preco_frete: p.preco_frete ? parseFloat(p.preco_frete) : 0,
+                delivery_pin: p.delivery_pin,
+                driver_token: p.driver_token,
+                driver_token_expires: p.driver_token_expires,
+                driver_lat: p.driver_lat,
+                driver_lng: p.driver_lng,
+                driver_link: driverLink,
+                is_out_for_delivery: isOutForDelivery,
+                cliente: {
+                    nome: p.usuarios?.nome_completo || 'Cliente',
+                    telefone: telefoneCliente
+                },
+                endereco: {
+                    logradouro: p.enderecos?.logradouro || p.entrega_logradouro,
+                    numero: p.enderecos?.numero || p.entrega_numero,
+                    complemento: p.enderecos?.complemento || p.entrega_complemento,
+                    bairro: p.enderecos?.bairro || p.entrega_bairro,
+                    cidade: p.enderecos?.cidade || p.entrega_cidade,
+                    estado: p.enderecos?.estado || p.entrega_estado,
+                    cep: p.enderecos?.cep || p.entrega_cep,
+                    latitude: p.enderecos?.latitude || null,
+                    longitude: p.enderecos?.longitude || null
+                },
+                itens: (p.pedido_items || []).map(item => ({
+                    id_item: item.id_item,
+                    nome_produto: item.nome,
+                    quantidade: item.quantidade ? parseFloat(item.quantidade) : 1,
+                    preco_unitario: item.preco ? parseFloat(item.preco) : 0
+                }))
+            };
+        });
+
+        const [distMode, payType, fixedFee, kmRate, baseFee, maxKm, funcsRaw] = await Promise.all([
+            ConfiguracaoModel.get('DELIVERY_DISTRIBUTION_MODE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_PAYMENT_TYPE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_FIXED_FEE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_KM_RATE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_BASE_FEE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_MAX_KM', id_tenant),
+            prisma.funcionarios.findMany({
+                where: { id_tenant, ativo: true },
+                include: { cargos: true },
+                orderBy: { nome_completo: 'asc' }
+            })
+        ]);
+
+        const entregadores = funcsRaw.filter(f => {
+            if (f.isAdmin || f.role === 'ADMIN' || f.cargos?.is_dono) return true;
+            const perms = f.cargos?.permissoes || [];
+            return Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS');
+        }).map(f => ({
+            id_funcionario: f.id_funcionario,
+            nome_completo: f.nome_completo,
+            email: f.email,
+            cargo: f.cargos?.nome || 'Entregador',
+            imagem: f.imagem || null
+        }));
+
+        res.json({
+            loja: loja || null,
+            config_logistica: {
+                distribution_mode: distMode || 'MANUAL',
+                payment_type: payType || 'FIXED',
+                fixed_fee: parseFloat(fixedFee || 7.00),
+                km_rate: parseFloat(kmRate || 1.50),
+                base_fee: parseFloat(baseFee || 5.00),
+                max_km: parseFloat(maxKm || 15)
+            },
+            pedidos: pedidosFormatados,
+            entregadores
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const geocodePedidoEndereco = async (req, res, next) => {
+    try {
+        const id_pedido = Number(req.params.id);
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+
+        const pedido = await prisma.pedidos.findFirst({
+            where: { id_pedido, id_tenant },
+            include: { enderecos: true }
+        });
+
+        if (!pedido) return res.status(404).json({ message: 'Pedido não encontrado.' });
+
+        const end = pedido.enderecos || {
+            logradouro: pedido.entrega_logradouro,
+            numero: pedido.entrega_numero,
+            bairro: pedido.entrega_bairro,
+            cidade: pedido.entrega_cidade,
+            estado: pedido.entrega_estado,
+            cep: pedido.entrega_cep
+        };
+
+        if (end.latitude && end.longitude) {
+            return res.json({ latitude: end.latitude, longitude: end.longitude });
+        }
+
+        const coords = await geocodeAddress(end);
+        if (!coords) {
+            return res.status(400).json({ message: 'Não foi possível encontrar as coordenadas deste endereço.' });
+        }
+
+        if (pedido.id_endereco_entrega) {
+            await prisma.enderecos.update({
+                where: { id_endereco: pedido.id_endereco_entrega },
+                data: { latitude: coords.latitude, longitude: coords.longitude }
+            }).catch(() => {});
+        }
+
+        return res.json(coords);
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getDeliverySettings = async (req, res, next) => {
+    try {
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+
+        const [distMode, payType, fixedFee, kmRate, baseFee, maxKm] = await Promise.all([
+            ConfiguracaoModel.get('DELIVERY_DISTRIBUTION_MODE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_PAYMENT_TYPE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_FIXED_FEE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_KM_RATE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_BASE_FEE', id_tenant),
+            ConfiguracaoModel.get('DELIVERY_MAX_KM', id_tenant)
+        ]);
+
+        res.json({
+            distribution_mode: distMode || 'MANUAL', // 'MANUAL' (Direcionado pelo lojista) ou 'QUEUE' (Fila aberta para os motoboys pegarem)
+            payment_type: payType || 'FIXED',        // 'NONE' (Sem pagamento), 'FIXED' (Por entrega fixa), 'DISTANCE' (Por KM rodado), 'HYBRID' (Base + KM)
+            fixed_fee: parseFloat(fixedFee || 7.00),
+            km_rate: parseFloat(kmRate || 1.50),
+            base_fee: parseFloat(baseFee || 5.00),
+            max_km: parseFloat(maxKm || 15)
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const updateDeliverySettings = async (req, res, next) => {
+    try {
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+        const {
+            distribution_mode,
+            payment_type,
+            fixed_fee,
+            km_rate,
+            base_fee,
+            max_km
+        } = req.body;
+
+        await Promise.all([
+            distribution_mode !== undefined && ConfiguracaoModel.set('DELIVERY_DISTRIBUTION_MODE', distribution_mode, id_tenant),
+            payment_type !== undefined && ConfiguracaoModel.set('DELIVERY_PAYMENT_TYPE', payment_type, id_tenant),
+            fixed_fee !== undefined && ConfiguracaoModel.set('DELIVERY_FIXED_FEE', fixed_fee, id_tenant),
+            km_rate !== undefined && ConfiguracaoModel.set('DELIVERY_KM_RATE', km_rate, id_tenant),
+            base_fee !== undefined && ConfiguracaoModel.set('DELIVERY_BASE_FEE', base_fee, id_tenant),
+            max_km !== undefined && ConfiguracaoModel.set('DELIVERY_MAX_KM', max_km, id_tenant)
+        ]);
+
+        res.json({ success: true, message: 'Configurações de entrega salvas com sucesso!' });
+    } catch (error) {
+        next(error);
+    }
 };
 
 export const getNovosPedidosCount = async (req, res, next) => {

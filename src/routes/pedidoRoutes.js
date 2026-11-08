@@ -14,6 +14,11 @@ import {
     getDeliveryDataByToken,
     updateDriverLocation,
     getNovosPedidosCount,
+    getEntregasRadar,        // 🟢 RADAR DE ENTREGAS & MAPA
+    geocodePedidoEndereco,   // 🟢 GEOCODIFICAÇÃO DE ENDEREÇO
+    getDeliverySettings,     // 🟢 CONFIGS DE LOGÍSTICA & ENTREGADORES
+    updateDeliverySettings,  // 🟢 ATUALIZAR CONFIGS DE LOGÍSTICA
+    getEntregadoresDisponiveis, // 🟢 LISTAR ENTREGADORES ELEGÍVEIS (DRIVER_APP_ACCESS)
     gerarPdfA4,              // 🟢 NOVA ROTA IMPORTADA
     imprimirTermicaCaixa     // 🟢 NOVA ROTA IMPORTADA
 } from '../controllers/pedidoController.js';
@@ -44,12 +49,19 @@ router.get('/', protect, requirePermission('PEDIDOS_VIEW'), getAllPedidos);
 
 router.get('/novos/count', protect, requirePermission('PEDIDOS_VIEW'), getNovosPedidosCount);
 
+// 🟢 RADAR DE ENTREGAS & MAPA (Requer permissão de VISUALIZAR MAPA)
+router.get('/entregas/radar', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), getEntregasRadar);
+router.get('/entregas/config', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), getDeliverySettings);
+router.put('/entregas/config', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_MANAGE']), updateDeliverySettings);
+router.get('/entregas/entregadores', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), getEntregadoresDisponiveis);
+router.post('/:id/geocode', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), geocodePedidoEndereco);
+
 // 🟢 NOVAS ROTAS DE IMPRESSÃO (Requer permissão de VISUALIZAR)
 router.get('/:id/imprimir-a4', protect, requirePermission('PEDIDOS_VIEW'), gerarPdfA4);
 router.post('/:id/imprimir-termica', protect, requirePermission('PEDIDOS_VIEW'), imprimirTermicaCaixa);
 
-// Despachar/entregar ou alterar status (Requer permissão de GERENCIAR)
-router.put('/:id/deliver', protect, requirePermission('PEDIDOS_MANAGE'), updatePedidoParaEntregue);
+// Despachar/entregar ou alterar status (Requer permissão de GERENCIAR ou VISUALIZAR MAPA)
+router.put('/:id/deliver', protect, requirePermission(['PEDIDOS_MANAGE', 'ENTREGAS_MAPA_VIEW']), updatePedidoParaEntregue);
 router.put('/:id/status', protect, requirePermission('PEDIDOS_MANAGE'), updatePedidoStatus);
 
 // ==========================================================

@@ -6,15 +6,19 @@ export const requirePermission = (requiredPermission) => {
         }
 
         // 2. Verifica se a permissão exigida está no array de permissões do funcionário
-        const hasPermission = req.user && req.user.permissoes && req.user.permissoes.includes(requiredPermission);
+        const userPerms = req.user?.permissoes || [];
+        const hasPermission = Array.isArray(requiredPermission)
+            ? requiredPermission.some(p => userPerms.includes(p))
+            : userPerms.includes(requiredPermission);
 
         if (hasPermission) {
             return next();
         }
 
         // 3. Se chegou aqui, bloqueia o acesso
+        const permNome = Array.isArray(requiredPermission) ? requiredPermission.join(' ou ') : requiredPermission;
         return res.status(403).json({ 
-            message: `Acesso negado. Você não possui a permissão: ${requiredPermission}` 
+            message: `Acesso negado. Você não possui a permissão: ${permNome}` 
         });
     };
 };
