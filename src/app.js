@@ -226,6 +226,17 @@ if (!fs.existsSync(uploadsPath)){
     fs.mkdirSync(uploadsPath, { recursive: true });
 }
 
+// Suporte direto para downloads de executáveis e APKs
+const downloadsStaticPath = path.join(uploadsPath, 'downloads');
+if (!fs.existsSync(downloadsStaticPath)) {
+    fs.mkdirSync(downloadsStaticPath, { recursive: true });
+}
+app.use(['/downloads', '/uploads/downloads'], (req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Expose-Headers", "Content-Disposition, Content-Length");
+    next();
+}, express.static(downloadsStaticPath));
+
 app.use('/uploads', (req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*"); 
     res.header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges");
