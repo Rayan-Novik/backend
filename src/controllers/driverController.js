@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import generateToken from '../utils/generateToken.js';
 import ConfiguracaoModel from '../models/configuracaoModel.js';
 import { decrypt } from '../services/cryptoService.js';
+import { isPedidoParaEntrega } from './pedidoController.js';
 
 const prisma = new PrismaClient();
 
@@ -325,7 +326,7 @@ export const getDriverFeed = async (req, res, next) => {
             };
         };
 
-        const minhas_entregas = minhasAtivasRaw.map(formatOrder);
+        const minhas_entregas = minhasAtivasRaw.filter(isPedidoParaEntrega).map(formatOrder);
 
         // 3. Fila de Pedidos Disponíveis (Apenas se o modo for 'QUEUE' / Fila Aberta)
         let fila_disponivel = [];
@@ -362,7 +363,7 @@ export const getDriverFeed = async (req, res, next) => {
                 take: 50
             });
 
-            fila_disponivel = filaRaw.map(formatOrder);
+            fila_disponivel = filaRaw.filter(isPedidoParaEntrega).map(formatOrder);
         }
 
         // 4. Histórico de Entregas Concluídas Hoje pelo Entregador
@@ -462,8 +463,8 @@ export const claimOrder = async (req, res, next) => {
             }
         });
 
-        if (!pedido) {
-            return res.status(404).json({ message: 'Este pedido já foi pego por outro entregador ou não está disponível.' });
+        if (!pedido || !isPedidoParaEntrega(pedido)) {
+            return res.status(404).json({ message: 'Este pedido já foi pego por outro entregador ou não é destinado para entrega.' });
         }
 
         // Atribui ao entregador e coloca em rota

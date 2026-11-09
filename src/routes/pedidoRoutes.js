@@ -16,6 +16,7 @@ import {
     getNovosPedidosCount,
     getEntregasRadar,        // 🟢 RADAR DE ENTREGAS & MAPA
     geocodePedidoEndereco,   // 🟢 GEOCODIFICAÇÃO DE ENDEREÇO
+    updatePedidoEndereco,    // 🟢 ATUALIZAR E RE-GEOCODIFICAR ENDEREÇO DE UM PEDIDO
     getDeliverySettings,     // 🟢 CONFIGS DE LOGÍSTICA & ENTREGADORES
     updateDeliverySettings,  // 🟢 ATUALIZAR CONFIGS DE LOGÍSTICA
     getEntregadoresDisponiveis, // 🟢 LISTAR ENTREGADORES ELEGÍVEIS (DRIVER_APP_ACCESS)
@@ -55,6 +56,7 @@ router.get('/entregas/config', protect, requirePermission(['ENTREGAS_MAPA_VIEW',
 router.put('/entregas/config', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_MANAGE']), updateDeliverySettings);
 router.get('/entregas/entregadores', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), getEntregadoresDisponiveis);
 router.post('/:id/geocode', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW']), geocodePedidoEndereco);
+router.put('/:id/endereco', protect, requirePermission(['ENTREGAS_MAPA_VIEW', 'PEDIDOS_MANAGE']), updatePedidoEndereco);
 
 // 🟢 NOVAS ROTAS DE IMPRESSÃO (Requer permissão de VISUALIZAR)
 router.get('/:id/imprimir-a4', protect, requirePermission('PEDIDOS_VIEW'), gerarPdfA4);

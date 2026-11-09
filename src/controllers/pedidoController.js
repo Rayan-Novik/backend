@@ -84,6 +84,30 @@ export function isEntregadorElegivel(f) {
     });
 }
 
+// 🟢 FILTRO EXCLUSIVO: APENAS PEDIDOS COM DESTINO/STATUS DE ENTREGA (IGNORA RETIRADA NA LOJA, MESA E BALCÃO PDV)
+export function isPedidoParaEntrega(p) {
+    if (!p) return false;
+    const statusEntrega = String(p.status_entrega || '').toLowerCase().trim();
+    if (statusEntrega === 'cancelado' || statusEntrega.includes('expira') || statusEntrega === 'entregue') {
+        return false;
+    }
+    if (String(p.status_pagamento || '').toUpperCase() === 'CANCELADO') {
+        return false;
+    }
+    const envio = String(p.metodo_envio || '').toLowerCase().trim();
+    if (envio.includes('retirada') || envio.includes('local') || envio.includes('balcão') || envio.includes('balcao') || envio.includes('mesa')) {
+        return false;
+    }
+    // Se for PDV ou Comanda de salão sem endereço de entrega, não entra na fila de entregas
+    if ((p.canal_venda === 'PDV' || p.canal_venda === 'COMANDA') && !p.id_endereco_entrega && !p.entrega_logradouro) {
+        return false;
+    }
+    // É entrega se o método de envio for Delivery/Entrega OU se tiver endereço de entrega especificado
+    const hasAddress = !!(p.id_endereco_entrega || p.entrega_logradouro || (p.enderecos && (p.enderecos.logradouro || p.enderecos.cep)));
+    const isDeliveryMethod = envio === 'delivery' || envio.includes('entrega') || envio.includes('delivery');
+    return isDeliveryMethod || hasAddress;
+}
+
 const verificarLojaAberta = (horaAbertura, horaFechamento, diasStr = "0,1,2,3,4,5,6") => {
     if (!horaAbertura || !horaFechamento) return true;
 
@@ -1109,7 +1133,7 @@ export const getEntregasRadar = async (req, res, next) => {
         });
 
         // 2. Pedidos ativos no fluxo de entrega
-        const pedidos = await prisma.pedidos.findMany({
+        const pedidosRaw = await prisma.pedidos.findMany({
             where: {
                 id_tenant: id_tenant,
                 deletado_em: null,
@@ -1150,6 +1174,9 @@ export const getEntregasRadar = async (req, res, next) => {
                 data_pedido: 'desc'
             }
         });
+
+        // 🟢 Filtra estritamente apenas pedidos para ENTREGA (ignora Retirada na Loja, Balcão PDV, Mesa)
+        const pedidos = pedidosRaw.filter(isPedidoParaEntrega);
 
         // 3. Geocodifica automaticamente endereços que ainda não possuem coordenadas
         await Promise.all(
@@ -1380,6 +1407,131 @@ export const geocodePedidoEndereco = async (req, res, next) => {
         }
 
         return res.json(coords);
+    } catch (error) {
+        next(error);
+    }
+};
+
+// 🟢 ATUALIZAR E RE-GEOCODIFICAR ENDEREÇO DE UM PEDIDO MANUALMENTE PELO PAINEL
+export const updatePedidoEndereco = async (req, res, next) => {
+    try {
+        const id_pedido = Number(req.params.id);
+        const id_tenant = Number(req.tenantId || req.user?.id_tenant || 1);
+        const { logradouro, numero, complemento, bairro, cidade, estado, cep } = req.body;
+
+        if (!logradouro) {
+            return res.status(400).json({ message: 'Logradouro / Rua é obrigatório.' });
+        }
+
+        const pedido = await prisma.pedidos.findFirst({
+            where: { id_pedido, id_tenant },
+            include: { enderecos: true }
+        });
+
+        if (!pedido) {
+            return res.status(404).json({ message: 'Pedido não encontrado.' });
+        }
+
+        // 1. Geocodifica automaticamente o novo endereço
+        const dadosGeo = {
+            logradouro: String(logradouro).trim(),
+            numero: numero ? String(numero).trim() : '',
+            bairro: bairro ? String(bairro).trim() : '',
+            cidade: cidade ? String(cidade).trim() : '',
+            estado: estado ? String(estado).trim() : '',
+            cep: cep ? String(cep).replace(/\D/g, '') : ''
+        };
+
+        const coords = await geocodeAddress(dadosGeo);
+        const lat = coords?.latitude || null;
+        const lng = coords?.longitude || null;
+
+        // 2. Atualiza os campos de entrega no Pedido
+        const updatePedidoData = {
+            entrega_logradouro: dadosGeo.logradouro,
+            entrega_numero: dadosGeo.numero || 'S/N',
+            entrega_complemento: complemento ? String(complemento).trim() : null,
+            entrega_bairro: dadosGeo.bairro || null,
+            entrega_cidade: dadosGeo.cidade || null,
+            entrega_estado: dadosGeo.estado || null,
+            entrega_cep: dadosGeo.cep || null
+        };
+
+        // 3. Atualiza ou cria o registro na tabela de endereços
+        let enderecoFinal = null;
+        if (pedido.id_endereco_entrega) {
+            enderecoFinal = await prisma.enderecos.update({
+                where: { id_endereco: pedido.id_endereco_entrega },
+                data: {
+                    logradouro: dadosGeo.logradouro,
+                    numero: dadosGeo.numero || 'S/N',
+                    complemento: complemento ? String(complemento).trim() : null,
+                    bairro: dadosGeo.bairro || '',
+                    cidade: dadosGeo.cidade || '',
+                    estado: dadosGeo.estado || '',
+                    cep: dadosGeo.cep || null,
+                    latitude: lat,
+                    longitude: lng
+                }
+            });
+        } else if (pedido.id_usuario) {
+            enderecoFinal = await prisma.enderecos.create({
+                data: {
+                    id_usuario: pedido.id_usuario,
+                    logradouro: dadosGeo.logradouro,
+                    numero: dadosGeo.numero || 'S/N',
+                    complemento: complemento ? String(complemento).trim() : null,
+                    bairro: dadosGeo.bairro || '',
+                    cidade: dadosGeo.cidade || '',
+                    estado: dadosGeo.estado || '',
+                    cep: dadosGeo.cep || null,
+                    latitude: lat,
+                    longitude: lng
+                }
+            });
+            updatePedidoData.id_endereco_entrega = enderecoFinal.id_endereco;
+        }
+
+        await prisma.pedidos.update({
+            where: { id_pedido },
+            data: updatePedidoData
+        });
+
+        // 4. Notifica via Socket.io em tempo real
+        if (global.io) {
+            global.io.emit('pedido_atualizado', {
+                id_pedido,
+                endereco: {
+                    logradouro: dadosGeo.logradouro,
+                    numero: dadosGeo.numero,
+                    complemento,
+                    bairro: dadosGeo.bairro,
+                    cidade: dadosGeo.cidade,
+                    estado: dadosGeo.estado,
+                    cep: dadosGeo.cep,
+                    latitude: lat,
+                    longitude: lng
+                }
+            });
+        }
+
+        return res.json({
+            success: true,
+            message: lat && lng 
+                ? 'Endereço atualizado e localizado no mapa com sucesso!' 
+                : 'Endereço atualizado com sucesso!',
+            endereco: {
+                logradouro: dadosGeo.logradouro,
+                numero: dadosGeo.numero,
+                complemento,
+                bairro: dadosGeo.bairro,
+                cidade: dadosGeo.cidade,
+                estado: dadosGeo.estado,
+                cep: dadosGeo.cep,
+                latitude: lat,
+                longitude: lng
+            }
+        });
     } catch (error) {
         next(error);
     }
