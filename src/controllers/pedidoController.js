@@ -94,6 +94,10 @@ export function isPedidoParaEntrega(p) {
     if (String(p.status_pagamento || '').toUpperCase() === 'CANCELADO') {
         return false;
     }
+    // 🟢 Se o pedido já estiver em rota ou tiver dados de entrega/motoboy ativos, é sempre tratado como entrega
+    if (statusEntrega === 'em rota de entrega' || p.is_out_for_delivery || p.driver_token || (p.driver_lat && p.driver_lng)) {
+        return true;
+    }
     const envio = String(p.metodo_envio || '').toLowerCase().trim();
     if (envio.includes('retirada') || envio.includes('local') || envio.includes('balcão') || envio.includes('balcao') || envio.includes('mesa')) {
         return false;
@@ -1268,6 +1272,13 @@ export const getEntregasRadar = async (req, res, next) => {
             const isOutForDelivery = p.status_entrega === 'Em Rota de Entrega';
             const driverLink = p.driver_token ? `${process.env.FRONTEND_URL || ''}/driver/delivery/${p.driver_token}` : null;
 
+            let motoboyNome = null;
+            if (p.nome_atendente && p.nome_atendente.includes('Entregador:')) {
+                motoboyNome = p.nome_atendente.replace('Entregador:', '').trim();
+            } else if (p.nome_atendente) {
+                motoboyNome = p.nome_atendente.trim();
+            }
+
             return {
                 id_pedido: p.id_pedido,
                 data_pedido: p.data_pedido,
@@ -1283,6 +1294,12 @@ export const getEntregasRadar = async (req, res, next) => {
                 driver_lat: p.driver_lat,
                 driver_lng: p.driver_lng,
                 driver_link: driverLink,
+                driver_nome: motoboyNome || 'Entregador',
+                driver: {
+                    nome: motoboyNome || 'Entregador',
+                    latitude: p.driver_lat,
+                    longitude: p.driver_lng
+                },
                 is_out_for_delivery: isOutForDelivery,
                 cliente: {
                     nome: p.usuarios?.nome_completo || 'Cliente',
