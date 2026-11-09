@@ -50,6 +50,40 @@ cron.schedule('*/10 * * * *', async () => {
     }
 });
 
+export function parsePermissoes(perms) {
+    if (!perms) return [];
+    if (Array.isArray(perms)) return perms;
+    if (typeof perms === 'string') {
+        try {
+            const parsed = JSON.parse(perms);
+            return Array.isArray(parsed) ? parsed : [parsed];
+        } catch (_) {
+            return perms.split(',').map(s => s.trim());
+        }
+    }
+    return [];
+}
+
+export function isEntregadorElegivel(f) {
+    if (!f) return false;
+    if (f.is_dono || f.isAdmin || f.role === 'ADMIN' || f.cargos?.is_dono) return true;
+    const cargoNome = String(f.cargos?.nome || f.cargoNome || '').toLowerCase().trim();
+    const roleNome = String(f.role || '').toLowerCase().trim();
+    if (
+        cargoNome.includes('entregador') || cargoNome.includes('motoboy') ||
+        cargoNome.includes('motorista') || cargoNome.includes('delivery') || cargoNome.includes('courier') ||
+        roleNome.includes('entregador') || roleNome.includes('motoboy') ||
+        roleNome.includes('motorista') || roleNome.includes('delivery') || roleNome.includes('courier')
+    ) {
+        return true;
+    }
+    const perms = parsePermissoes(f.cargos?.permissoes || f.permissoes);
+    return perms.some(p => {
+        const pUpper = String(p).toUpperCase().trim();
+        return pUpper === 'DRIVER_APP_ACCESS' || pUpper === 'ALL' || pUpper === 'ENTREGAS_MANAGE' || pUpper === 'ENTREGAS_MAPA_VIEW';
+    });
+}
+
 const verificarLojaAberta = (horaAbertura, horaFechamento, diasStr = "0,1,2,3,4,5,6") => {
     if (!horaAbertura || !horaFechamento) return true;
 
@@ -798,8 +832,7 @@ export const updatePedidoParaEntregue = async (req, res, next) => {
             });
 
             if (func) {
-                const perms = func.cargos?.permissoes || [];
-                const hasPerm = func.isAdmin || func.role === 'ADMIN' || (Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS'));
+                const hasPerm = isEntregadorElegivel(func);
                 if (!hasPerm) {
                     return res.status(403).json({
                         message: `O colaborador '${func.nome_completo}' pertence ao cargo '${func.cargos?.nome || 'Sem Cargo'}', que não possui a permissão necessária para o aplicativo de entregas (DRIVER_APP_ACCESS).`
@@ -874,15 +907,11 @@ export const getEntregadoresDisponiveis = async (req, res, next) => {
             orderBy: { nome_completo: 'asc' }
         });
 
-        const entregadores = funcsRaw.filter(f => {
-            if (f.isAdmin || f.role === 'ADMIN' || f.cargos?.is_dono) return true;
-            const perms = f.cargos?.permissoes || [];
-            return Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS');
-        }).map(f => ({
+        const entregadores = funcsRaw.filter(isEntregadorElegivel).map(f => ({
             id_funcionario: f.id_funcionario,
             nome_completo: f.nome_completo,
             email: f.email,
-            cargo: f.cargos?.nome || 'Entregador',
+            cargo: f.cargos?.nome || (f.role === 'ADMIN' ? 'Administrador' : 'Entregador'),
             imagem: f.imagem || null
         }));
 
@@ -1242,15 +1271,11 @@ export const getEntregasRadar = async (req, res, next) => {
             })
         ]);
 
-        const entregadores = funcsRaw.filter(f => {
-            if (f.isAdmin || f.role === 'ADMIN' || f.cargos?.is_dono) return true;
-            const perms = f.cargos?.permissoes || [];
-            return Array.isArray(perms) && perms.includes('DRIVER_APP_ACCESS');
-        }).map(f => ({
+        const entregadores = funcsRaw.filter(isEntregadorElegivel).map(f => ({
             id_funcionario: f.id_funcionario,
             nome_completo: f.nome_completo,
             email: f.email,
-            cargo: f.cargos?.nome || 'Entregador',
+            cargo: f.cargos?.nome || (f.role === 'ADMIN' ? 'Administrador' : 'Entregador'),
             imagem: f.imagem || null
         }));
 

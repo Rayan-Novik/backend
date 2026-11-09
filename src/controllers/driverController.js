@@ -109,13 +109,27 @@ export const driverLogin = async (req, res, next) => {
         }
 
         // 3. 🔒 CHECAGEM DA PERMISSÃO DO APLICATIVO ANDROID (DRIVER_APP_ACCESS)
-        const permissoes = funcionario?.cargos ? funcionario.cargos.permissoes : [];
-        const isMaster = isOwnerAccount || funcionario?.isAdmin || funcionario?.role === 'ADMIN';
-        const isEntregadorCargo = funcionario?.cargos?.nome?.toLowerCase()?.includes('entregador') ||
-                                  funcionario?.cargos?.nome?.toLowerCase()?.includes('motoboy') ||
-                                  funcionario?.cargos?.nome?.toLowerCase()?.includes('motorista');
+        let permissoes = funcionario?.cargos ? funcionario.cargos.permissoes : [];
+        if (typeof permissoes === 'string') {
+            try { permissoes = JSON.parse(permissoes); } catch (_) { permissoes = []; }
+        }
+        if (!Array.isArray(permissoes)) permissoes = [];
 
-        const hasDriverPermission = isMaster || permissoes.includes('DRIVER_APP_ACCESS') || isEntregadorCargo;
+        const isMaster = isOwnerAccount || funcionario?.isAdmin || funcionario?.role === 'ADMIN';
+        const cargoNomeLower = String(funcionario?.cargos?.nome || '').toLowerCase().trim();
+        const roleLower = String(funcionario?.role || '').toLowerCase().trim();
+        const isEntregadorCargo = cargoNomeLower.includes('entregador') ||
+                                  cargoNomeLower.includes('motoboy') ||
+                                  cargoNomeLower.includes('motorista') ||
+                                  cargoNomeLower.includes('delivery') ||
+                                  roleLower.includes('entregador') ||
+                                  roleLower.includes('motoboy') ||
+                                  roleLower.includes('motorista') ||
+                                  roleLower.includes('delivery');
+
+        const hasDriverPermission = isMaster || 
+            permissoes.some(p => String(p).toUpperCase() === 'DRIVER_APP_ACCESS' || String(p).toUpperCase() === 'ALL') || 
+            isEntregadorCargo;
 
         if (!hasDriverPermission) {
             const cargoNome = funcionario?.cargos?.nome || 'Sem Cargo';
@@ -184,7 +198,9 @@ export const driverLogin = async (req, res, next) => {
                 email: funcionario ? funcionario.email : loja.email,
                 cargo: isMaster ? 'Administrador / Dono' : (funcionario?.cargos?.nome || 'Entregador'),
                 imagem: funcionario?.imagem || loja.imagem || null,
-                permissoes: isMaster ? ['DRIVER_APP_ACCESS', 'ALL'] : permissoes
+                permissoes: isMaster
+                    ? ['DRIVER_APP_ACCESS', 'ALL']
+                    : (permissoes.some(p => String(p).toUpperCase() === 'DRIVER_APP_ACCESS') ? permissoes : [...permissoes, 'DRIVER_APP_ACCESS'])
             },
             loja: {
                 id: loja.id,
@@ -313,14 +329,29 @@ export const getDriverFeed = async (req, res, next) => {
 
         // 3. Fila de Pedidos Disponíveis (Apenas se o modo for 'QUEUE' / Fila Aberta)
         let fila_disponivel = [];
-        if (config.distribution_mode === 'QUEUE') {
+        const isQueueMode = String(config.distribution_mode || '').trim().toUpperCase() === 'QUEUE';
+        if (isQueueMode) {
             const filaRaw = await prisma.pedidos.findMany({
                 where: {
                     id_tenant,
-                    status_entrega: { in: ['Pendente', 'Em Preparo', 'Pronto para Retirada'] },
+                    status_entrega: {
+                        in: [
+                            'Pendente',
+                            'Em Preparo',
+                            'Pronto para Retirada',
+                            'Em processamento',
+                            'Aguardando Envio',
+                            'Pronto',
+                            'pendente',
+                            'PENDENTE'
+                        ]
+                    },
                     codigo_rastreio: null,
                     driver_token: null,
-                    deletado_em: null
+                    deletado_em: null,
+                    NOT: {
+                        status_pagamento: 'CANCELADO'
+                    }
                 },
                 include: {
                     usuarios: { select: { nome_completo: true, telefone_criptografado: true } },
@@ -328,7 +359,7 @@ export const getDriverFeed = async (req, res, next) => {
                     pedido_items: { select: { id_item: true, nome: true, quantidade: true, preco: true } }
                 },
                 orderBy: { data_pedido: 'asc' },
-                take: 30
+                take: 50
             });
 
             fila_disponivel = filaRaw.map(formatOrder);
@@ -399,7 +430,8 @@ export const claimOrder = async (req, res, next) => {
 
         // Verifica configuração
         const distMode = await ConfiguracaoModel.get('DELIVERY_DISTRIBUTION_MODE', id_tenant);
-        if (distMode === 'MANUAL') {
+        const isManualMode = String(distMode || '').trim().toUpperCase() === 'MANUAL';
+        if (isManualMode) {
             return res.status(400).json({
                 message: 'A loja está configurada para Despacho Manual. As entregas são direcionadas diretamente pelo lojista.'
             });
@@ -410,9 +442,23 @@ export const claimOrder = async (req, res, next) => {
             where: {
                 id_pedido,
                 id_tenant,
-                status_entrega: { in: ['Pendente', 'Em Preparo', 'Pronto para Retirada'] },
+                status_entrega: {
+                    in: [
+                        'Pendente',
+                        'Em Preparo',
+                        'Pronto para Retirada',
+                        'Em processamento',
+                        'Aguardando Envio',
+                        'Pronto',
+                        'pendente',
+                        'PENDENTE'
+                    ]
+                },
                 codigo_rastreio: null,
-                deletado_em: null
+                deletado_em: null,
+                NOT: {
+                    status_pagamento: 'CANCELADO'
+                }
             }
         });
 

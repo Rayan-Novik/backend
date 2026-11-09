@@ -48,7 +48,9 @@ export const protect = async (req, res, next) => {
                     nome_completo: loja.nome_fantasia || 'Proprietário',
                     email: loja.email,
                     isAdmin: true,
-                    role: 'ADMIN'
+                    role: 'ADMIN',
+                    cargoNome: 'Dono / Administrador',
+                    permissoes: ['ALL', 'DRIVER_APP_ACCESS', 'ENTREGAS_MANAGE', 'ENTREGAS_MAPA_VIEW']
                 };
 
                 return next(); 
@@ -70,7 +72,29 @@ export const protect = async (req, res, next) => {
                     return res.status(401).json({ forceLogout: true, message: 'Sua conta foi acessada em outro dispositivo.' });
                 }
 
-                const permissoes = staff.cargos ? staff.cargos.permissoes : [];
+                let permissoes = staff.cargos ? staff.cargos.permissoes : [];
+                if (typeof permissoes === 'string') {
+                    try { permissoes = JSON.parse(permissoes); } catch (_) { permissoes = []; }
+                }
+                if (!Array.isArray(permissoes)) {
+                    permissoes = [];
+                }
+
+                const cargoNome = staff.cargos?.nome || '';
+                const cargoNomeLower = cargoNome.toLowerCase().trim();
+                const roleLower = String(staff.role || '').toLowerCase().trim();
+                const isEntregador = cargoNomeLower.includes('entregador') ||
+                                     cargoNomeLower.includes('motoboy') ||
+                                     cargoNomeLower.includes('motorista') ||
+                                     cargoNomeLower.includes('delivery') ||
+                                     roleLower.includes('entregador') ||
+                                     roleLower.includes('motoboy') ||
+                                     roleLower.includes('motorista') ||
+                                     roleLower.includes('delivery');
+
+                if (isEntregador && !permissoes.some(p => String(p).toUpperCase() === 'DRIVER_APP_ACCESS')) {
+                    permissoes.push('DRIVER_APP_ACCESS');
+                }
 
                 req.user = {
                     id_usuario: staff.id_funcionario, 
@@ -80,6 +104,8 @@ export const protect = async (req, res, next) => {
                     isAdmin: staff.isAdmin,
                     role: staff.role,
                     id_cargo: staff.id_cargo,
+                    cargoNome: cargoNome,
+                    cargos: staff.cargos,
                     permissoes: permissoes 
                 };
                 return next();
