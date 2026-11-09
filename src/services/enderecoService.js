@@ -1,5 +1,6 @@
 import EnderecoModel from '../models/enderecoModel.js';
 import { buscarEnderecoPorCep } from './viacepService.js';
+import { geocodeAddress } from './geocodingService.js';
 
 export default {
     async getUserAddresses(id_usuario, id_tenant) {
@@ -7,10 +8,10 @@ export default {
     },
 
     async createAddress(id_usuario, dadosEntrada, id_tenant) {
-        // 🟢 Agora extraímos também latitude, longitude e is_principal
+        // 🟢 Extraímos os dados informados pelo cliente
         const { cep, numero, complemento, logradouro, bairro, cidade, estado, latitude, longitude, is_principal } = dadosEntrada;
         
-        // 🟢 CEP NÃO é mais obrigatório! Exigimos apenas o básico para a entrega
+        // 🟢 Exigimos o básico para a entrega
         if (!logradouro || !numero || !bairro || !cidade || !estado) {
             throw new Error('Rua, número, bairro, cidade e estado são obrigatórios.');
         }
@@ -23,8 +24,8 @@ export default {
             bairro: bairro,
             cidade: cidade,
             estado: estado,
-            latitude: latitude ? parseFloat(latitude) : null,
-            longitude: longitude ? parseFloat(longitude) : null,
+            latitude: (latitude && !isNaN(parseFloat(latitude))) ? parseFloat(latitude) : null,
+            longitude: (longitude && !isNaN(parseFloat(longitude))) ? parseFloat(longitude) : null,
             is_principal: is_principal || false
         };
 
@@ -38,8 +39,27 @@ export default {
                 dadosCompletos.cidade = dadosCompletos.cidade || dadosViaCep.cidade;
                 dadosCompletos.estado = dadosCompletos.estado || dadosViaCep.estado;
             } catch (error) {
-                // Se o ViaCEP falhar, confiamos no que o usuário digitou (via GPS ou manual)
                 console.warn(`ViaCEP falhou para o CEP ${dadosCompletos.cep}, usando dados manuais.`);
+            }
+        }
+
+        // 📍 GEOCODIFICAÇÃO AUTOMÁTICA: O cliente nunca precisa preencher coordenadas manualmente!
+        if (!dadosCompletos.latitude || !dadosCompletos.longitude) {
+            try {
+                const coords = await geocodeAddress({
+                    logradouro: dadosCompletos.logradouro,
+                    numero: dadosCompletos.numero,
+                    bairro: dadosCompletos.bairro,
+                    cidade: dadosCompletos.cidade,
+                    estado: dadosCompletos.estado,
+                    cep: dadosCompletos.cep
+                });
+                if (coords?.latitude && coords?.longitude) {
+                    dadosCompletos.latitude = coords.latitude;
+                    dadosCompletos.longitude = coords.longitude;
+                }
+            } catch (geoErr) {
+                console.warn('Falha silenciosa ao geocodificar novo endereço:', geoErr.message);
             }
         }
 
@@ -54,6 +74,27 @@ export default {
     async updateAddress(id_endereco, id_usuario, dadosAtualizacao, id_tenant) {
         if (dadosAtualizacao.cep) {
             dadosAtualizacao.cep = dadosAtualizacao.cep.replace(/\D/g, '');
+        }
+
+        // 📍 Se as coordenadas estiverem ausentes na atualização, recalcula automaticamente
+        if (!dadosAtualizacao.latitude || !dadosAtualizacao.longitude) {
+            try {
+                const endAtual = await EnderecoModel.findById(id_endereco, id_usuario, id_tenant);
+                const coords = await geocodeAddress({
+                    logradouro: dadosAtualizacao.logradouro || endAtual?.logradouro,
+                    numero: dadosAtualizacao.numero || endAtual?.numero,
+                    bairro: dadosAtualizacao.bairro || endAtual?.bairro,
+                    cidade: dadosAtualizacao.cidade || endAtual?.cidade,
+                    estado: dadosAtualizacao.estado || endAtual?.estado,
+                    cep: dadosAtualizacao.cep || endAtual?.cep
+                });
+                if (coords?.latitude && coords?.longitude) {
+                    dadosAtualizacao.latitude = coords.latitude;
+                    dadosAtualizacao.longitude = coords.longitude;
+                }
+            } catch (geoErr) {
+                console.warn('Falha silenciosa ao geocodificar endereço atualizado:', geoErr.message);
+            }
         }
 
         // Se o usuário marcou este como principal na edição, desmarca os outros

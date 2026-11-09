@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { encrypt, decrypt } from '../services/cryptoService.js';
+import { geocodeAddress } from '../services/geocodingService.js';
 
 const prisma = new PrismaClient();
 const toFloat = (val) => parseFloat(val) || 0;
@@ -114,6 +115,59 @@ export default {
                 dataToCreate.enderecos = {
                     connect: { id_endereco: Number(pedidoData.id_endereco_entrega) }
                 };
+
+                // Garante que o endereço associado possui latitude e longitude para o mapa
+                try {
+                    const end = await prisma.enderecos.findUnique({
+                        where: { id_endereco: Number(pedidoData.id_endereco_entrega) }
+                    });
+                    if (end && (!end.latitude || !end.longitude)) {
+                        const coords = await geocodeAddress({
+                            logradouro: end.logradouro,
+                            numero: end.numero,
+                            bairro: end.bairro,
+                            cidade: end.cidade,
+                            estado: end.estado,
+                            cep: end.cep
+                        });
+                        if (coords?.latitude && coords?.longitude) {
+                            await prisma.enderecos.update({
+                                where: { id_endereco: end.id_endereco },
+                                data: { latitude: coords.latitude, longitude: coords.longitude }
+                            });
+                        }
+                    }
+                } catch (e) {}
+            } else if (!pedidoData.id_endereco_entrega && tipoEntregaLabel === 'ENTREGA' && (pedidoData.entrega_logradouro || pedidoData.entrega_cep) && pedidoData.id_usuario) {
+                // Se comprou sem selecionar endereço prévio, cria e geocodifica automaticamente
+                try {
+                    const coords = await geocodeAddress({
+                        logradouro: pedidoData.entrega_logradouro,
+                        numero: pedidoData.entrega_numero,
+                        bairro: pedidoData.entrega_bairro,
+                        cidade: pedidoData.entrega_cidade,
+                        estado: pedidoData.entrega_estado,
+                        cep: pedidoData.entrega_cep
+                    });
+                    const novoEnd = await prisma.enderecos.create({
+                        data: {
+                            id_usuario: Number(pedidoData.id_usuario),
+                            logradouro: pedidoData.entrega_logradouro || 'Endereço de Entrega',
+                            numero: pedidoData.entrega_numero || 'S/N',
+                            complemento: complementoFinal,
+                            bairro: pedidoData.entrega_bairro || '',
+                            cidade: pedidoData.entrega_cidade || '',
+                            estado: pedidoData.entrega_estado || '',
+                            cep: pedidoData.entrega_cep ? String(pedidoData.entrega_cep).replace(/\D/g, '') : null,
+                            latitude: coords?.latitude || null,
+                            longitude: coords?.longitude || null,
+                            is_principal: false
+                        }
+                    });
+                    dataToCreate.enderecos = {
+                        connect: { id_endereco: novoEnd.id_endereco }
+                    };
+                } catch (e) {}
             }
 
             if (pedidoData.id_cupom_utilizado) {

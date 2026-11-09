@@ -1168,15 +1168,39 @@ export const getEntregasRadar = async (req, res, next) => {
                         });
 
                         if (coords?.latitude && coords?.longitude) {
-                            if (p.enderecos) {
-                                p.enderecos.latitude = coords.latitude;
-                                p.enderecos.longitude = coords.longitude;
+                            if (!p.enderecos) {
+                                p.enderecos = {};
                             }
+                            p.enderecos.latitude = coords.latitude;
+                            p.enderecos.longitude = coords.longitude;
+
                             if (end?.id_endereco) {
-                                prisma.enderecos.update({
+                                await prisma.enderecos.update({
                                     where: { id_endereco: end.id_endereco },
                                     data: { latitude: coords.latitude, longitude: coords.longitude }
                                 }).catch(() => {});
+                            } else if (p.id_usuario && p.id_pedido) {
+                                const novoEnd = await prisma.enderecos.create({
+                                    data: {
+                                        id_usuario: p.id_usuario,
+                                        logradouro: p.entrega_logradouro || 'Endereço',
+                                        numero: p.entrega_numero || 'S/N',
+                                        bairro: p.entrega_bairro || '',
+                                        cidade: p.entrega_cidade || '',
+                                        estado: p.entrega_estado || '',
+                                        cep: p.entrega_cep ? String(p.entrega_cep).replace(/\D/g, '') : null,
+                                        latitude: coords.latitude,
+                                        longitude: coords.longitude
+                                    }
+                                }).catch(() => null);
+
+                                if (novoEnd) {
+                                    p.enderecos = novoEnd;
+                                    await prisma.pedidos.update({
+                                        where: { id_pedido: p.id_pedido },
+                                        data: { id_endereco_entrega: novoEnd.id_endereco }
+                                    }).catch(() => {});
+                                }
                             }
                         }
                     } catch (e) {}
@@ -1332,6 +1356,27 @@ export const geocodePedidoEndereco = async (req, res, next) => {
                 where: { id_endereco: pedido.id_endereco_entrega },
                 data: { latitude: coords.latitude, longitude: coords.longitude }
             }).catch(() => {});
+        } else if (pedido.id_usuario) {
+            const novoEnd = await prisma.enderecos.create({
+                data: {
+                    id_usuario: pedido.id_usuario,
+                    logradouro: end.logradouro || 'Endereço',
+                    numero: end.numero || 'S/N',
+                    bairro: end.bairro || '',
+                    cidade: end.cidade || '',
+                    estado: end.estado || '',
+                    cep: end.cep ? String(end.cep).replace(/\D/g, '') : null,
+                    latitude: coords.latitude,
+                    longitude: coords.longitude
+                }
+            }).catch(() => null);
+
+            if (novoEnd) {
+                await prisma.pedidos.update({
+                    where: { id_pedido: pedido.id_pedido },
+                    data: { id_endereco_entrega: novoEnd.id_endereco }
+                }).catch(() => {});
+            }
         }
 
         return res.json(coords);

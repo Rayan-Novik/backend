@@ -2,7 +2,7 @@ import axios from 'axios';
 
 /**
  * Geocodifica um endereço brasileiro retornando latitude e longitude.
- * Utiliza o Photon (OpenStreetMap) e fallback para BrasilAPI (CEP v2).
+ * Utiliza o Photon (OpenStreetMap) em múltiplos estágios e fallback para BrasilAPI (CEP v2).
  */
 export async function geocodeAddress(endereco) {
     if (!endereco) return null;
@@ -14,14 +14,14 @@ export async function geocodeAddress(endereco) {
     const estado = endereco.estado || '';
     const cep = endereco.cep ? endereco.cep.toString().replace(/\D/g, '') : '';
 
-    // 1. TENTATIVA COM PHOTON (KOMOOT / OPENSTREETMAP) - ALTA PRECISÃO POR LOGRADOURO E NÚMERO
+    // 1. TENTATIVA 1: PHOTON (KOMOOT / OSM) - RUA + NÚMERO + BAIRRO + CIDADE + ESTADO
     try {
-        const termos = [logradouro, numero, bairro, cidade, estado, 'Brasil'].filter(Boolean).join(', ');
-        if (termos.length > 5) {
-            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termos)}&limit=1`;
+        const termosCompletos = [logradouro, numero, bairro, cidade, estado, 'Brasil'].filter(Boolean).join(', ');
+        if (termosCompletos.length > 5) {
+            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termosCompletos)}&limit=1`;
             const res = await axios.get(url, { 
                 timeout: 4500,
-                headers: { 'User-Agent': 'ArarinhaLogistics/1.0' }
+                headers: { 'User-Agent': 'AzunLogistics/1.0' }
             });
 
             if (res.data?.features?.length > 0) {
@@ -30,16 +30,37 @@ export async function geocodeAddress(endereco) {
                     return {
                         latitude: parseFloat(lat),
                         longitude: parseFloat(lng),
-                        source: 'photon'
+                        source: 'photon_full'
                     };
                 }
             }
         }
-    } catch (err) {
-        // Falha silenciosa para tentar o próximo provedor
-    }
+    } catch (err) {}
 
-    // 2. FALLBACK COM BRASILAPI (CEP v2) - RETORNA COORDENADAS DO CEP
+    // 2. TENTATIVA 2: PHOTON - APENAS RUA + BAIRRO + CIDADE + ESTADO (SEM NÚMERO)
+    try {
+        const termosRua = [logradouro, bairro, cidade, estado, 'Brasil'].filter(Boolean).join(', ');
+        if (termosRua.length > 5) {
+            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termosRua)}&limit=1`;
+            const res = await axios.get(url, { 
+                timeout: 4000,
+                headers: { 'User-Agent': 'AzunLogistics/1.0' }
+            });
+
+            if (res.data?.features?.length > 0) {
+                const [lng, lat] = res.data.features[0].geometry.coordinates;
+                if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                    return {
+                        latitude: parseFloat(lat),
+                        longitude: parseFloat(lng),
+                        source: 'photon_street'
+                    };
+                }
+            }
+        }
+    } catch (err) {}
+
+    // 3. TENTATIVA 3: BRASILAPI (CEP v2) - RETORNA COORDENADAS PRECISAS DO CEP
     if (cep && cep.length === 8) {
         try {
             const url = `https://brasilapi.com.br/api/cep/v2/${cep}`;
@@ -53,32 +74,53 @@ export async function geocodeAddress(endereco) {
                     return {
                         latitude: lat,
                         longitude: lng,
-                        source: 'brasilapi'
+                        source: 'brasilapi_cep'
                     };
                 }
             }
-        } catch (err) {
-            // Falha silenciosa
-        }
+        } catch (err) {}
     }
 
-    // 3. SEGUNDO FALLBACK: APENAS CIDADE E BAIRRO
+    // 4. TENTATIVA 4: PHOTON - APENAS BAIRRO + CIDADE + ESTADO
     try {
-        const termosCurto = [bairro, cidade, estado, 'Brasil'].filter(Boolean).join(', ');
-        if (termosCurto.length > 4) {
-            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termosCurto)}&limit=1`;
+        const termosBairro = [bairro, cidade, estado, 'Brasil'].filter(Boolean).join(', ');
+        if (termosBairro.length > 4) {
+            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termosBairro)}&limit=1`;
             const res = await axios.get(url, { 
                 timeout: 4000,
-                headers: { 'User-Agent': 'ArarinhaLogistics/1.0' }
+                headers: { 'User-Agent': 'AzunLogistics/1.0' }
             });
 
             if (res.data?.features?.length > 0) {
                 const [lng, lat] = res.data.features[0].geometry.coordinates;
-                if (lat && lng) {
+                if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
                     return {
                         latitude: parseFloat(lat),
                         longitude: parseFloat(lng),
-                        source: 'photon_neighborhood'
+                        source: 'photon_bairro'
+                    };
+                }
+            }
+        }
+    } catch (err) {}
+
+    // 5. TENTATIVA 5: PHOTON - APENAS CIDADE + ESTADO
+    try {
+        const termosCidade = [cidade, estado, 'Brasil'].filter(Boolean).join(', ');
+        if (termosCidade.length > 3) {
+            const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(termosCidade)}&limit=1`;
+            const res = await axios.get(url, { 
+                timeout: 4000,
+                headers: { 'User-Agent': 'AzunLogistics/1.0' }
+            });
+
+            if (res.data?.features?.length > 0) {
+                const [lng, lat] = res.data.features[0].geometry.coordinates;
+                if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                    return {
+                        latitude: parseFloat(lat),
+                        longitude: parseFloat(lng),
+                        source: 'photon_cidade'
                     };
                 }
             }
