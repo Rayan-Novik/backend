@@ -1882,10 +1882,10 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
             empresa: empresaFormatada,
             modulos: {
                 entregas_mapa: entregasMapaHabilitado,
-                mesas: true,
-                salao: true,
-                agenda: true,
-                vendas: true
+                modulo_mesas: true,
+                modulo_salao: true,
+                modulo_agenda: true,
+                modulo_vendas: true
             },
             aparencia: {
                 cor_primaria: aparenciaMap.HEADER_PRIMARY_COLOR || '#0284c7',
