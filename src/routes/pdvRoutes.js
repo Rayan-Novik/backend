@@ -22,7 +22,10 @@ import {
     obterCargaSyncCaixa,
     vincularCaixaPDV,
     obterMesasSync,
-    cancelarVendaPDV
+    cancelarVendaPDV,
+    obterModulosConfigPDV,
+    atualizarModulosConfigPDV,
+    obterModulosConfigCaixaPublico
 } from '../controllers/vendaslocais/pdvController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
@@ -61,6 +64,9 @@ router.post('/caixas/disparar-carga', protect, requirePermission('PDV_ACCESS'), 
 router.get('/caixas/carga-sync', obterCargaSyncCaixa);
 router.post('/caixas/vincular', vincularCaixaPDV);
 router.get('/caixas/mesas', obterMesasSync);
+router.get('/caixas/modulos', obterModulosConfigCaixaPublico);
+router.get('/modulos-config', protect, requirePermission('PDV_ACCESS'), obterModulosConfigPDV);
+router.put('/modulos-config', protect, requirePermission('PDV_ACCESS'), atualizarModulosConfigPDV);
 
 
 // --- ACESSOS FINANCEIROS (Ações sensíveis no caixa) ---

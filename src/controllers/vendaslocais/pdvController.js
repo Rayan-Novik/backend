@@ -1864,21 +1864,29 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
             };
         });
 
-        // 5. Busca configurações visuais e identidade da loja (cores do CustomizerPage e Logo Principal)
+        // 5. Busca configurações visuais e módulos da loja
         const configsDb = await prisma.configuracoes.findMany({
             where: {
                 id_tenant: Number(id_tenant),
-                chave: { in: ['HEADER_PRIMARY_COLOR', 'HEADER_SECONDARY_COLOR', 'LOGO_URL', 'FAVICON_URL', 'SITE_TITLE'] }
+                chave: { in: ['HEADER_PRIMARY_COLOR', 'HEADER_SECONDARY_COLOR', 'LOGO_URL', 'FAVICON_URL', 'SITE_TITLE', 'PDV_MODULO_ENTREGAS_MAPA'] }
             }
         });
         const aparenciaMap = {};
         configsDb.forEach(c => { aparenciaMap[c.chave] = c.valor; });
+        const entregasMapaHabilitado = aparenciaMap.PDV_MODULO_ENTREGAS_MAPA !== '0' && aparenciaMap.PDV_MODULO_ENTREGAS_MAPA !== 'false';
 
         const pacoteSincronizacao = {
             gerado_em: new Date().toISOString(),
             versao: Date.now(),
             tenant_id: tenantStr,
             empresa: empresaFormatada,
+            modulos: {
+                entregas_mapa: entregasMapaHabilitado,
+                mesas: true,
+                salao: true,
+                agenda: true,
+                vendas: true
+            },
             aparencia: {
                 cor_primaria: aparenciaMap.HEADER_PRIMARY_COLOR || '#0284c7',
                 cor_secundaria: aparenciaMap.HEADER_SECONDARY_COLOR || '#0369a1',
@@ -2215,5 +2223,87 @@ export const cancelarVendaPDV = async (req, res, next) => {
         });
     } catch (err) {
         next(err);
+    }
+};
+
+// ==========================================
+// 📦 CONTROLE DE MÓDULOS DO PDV DESKTOP (.EXE)
+// ==========================================
+export const obterModulosConfigPDV = async (req, res, next) => {
+    try {
+        const id_tenant = req.tenantId;
+        const cfg = await prisma.configuracoes.findFirst({
+            where: { id_tenant: Number(id_tenant), chave: 'PDV_MODULO_ENTREGAS_MAPA' }
+        });
+        const entregas_mapa = cfg ? (cfg.valor === '1' || cfg.valor === 'true') : true;
+        res.json({
+            success: true,
+            modulos: {
+                entregas_mapa,
+                mesas: true,
+                salao: true,
+                agenda: true,
+                vendas: true
+            }
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const atualizarModulosConfigPDV = async (req, res, next) => {
+    try {
+        const id_tenant = req.tenantId;
+        const { entregas_mapa } = req.body;
+        const valorStr = (entregas_mapa === true || entregas_mapa === 1 || entregas_mapa === '1' || entregas_mapa === 'true') ? '1' : '0';
+
+        await prisma.configuracoes.upsert({
+            where: { chave_id_tenant: { chave: 'PDV_MODULO_ENTREGAS_MAPA', id_tenant: Number(id_tenant) } },
+            create: { chave: 'PDV_MODULO_ENTREGAS_MAPA', valor: valorStr, id_tenant: Number(id_tenant) },
+            update: { valor: valorStr }
+        });
+
+        res.json({
+            success: true,
+            message: 'Configuração dos módulos do PDV salva com sucesso!',
+            entregas_mapa: valorStr === '1'
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const obterModulosConfigCaixaPublico = async (req, res, next) => {
+    try {
+        const token = req.query.token || req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'];
+        let tenantId = req.tenantId;
+        if (!tenantId && token) {
+            const cx = await prisma.pdv_caixas.findFirst({
+                where: { token_conexao: String(token), ativo: true }
+            });
+            if (cx) tenantId = Number(cx.tenant_id);
+        }
+        if (!tenantId) {
+            return res.json({
+                success: true,
+                modulos: { entregas_mapa: true, mesas: true, salao: true, agenda: true, vendas: true }
+            });
+        }
+        const cfg = await prisma.configuracoes.findFirst({
+            where: { id_tenant: Number(tenantId), chave: 'PDV_MODULO_ENTREGAS_MAPA' }
+        });
+        const entregas_mapa = cfg ? (cfg.valor === '1' || cfg.valor === 'true') : true;
+        res.json({
+            success: true,
+            modulos: {
+                entregas_mapa,
+                mesas: true,
+                salao: true,
+                agenda: true,
+                vendas: true
+            }
+        });
+    } catch (e) {
+        next(e);
     }
 };

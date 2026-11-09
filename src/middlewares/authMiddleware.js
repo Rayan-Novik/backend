@@ -6,6 +6,39 @@ const prisma = new PrismaClient();
 export const protect = async (req, res, next) => {
     let token;
 
+    // 0. Autenticação Direta por Token do Caixa PDV Desktop
+    let tokenCaixa = req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'] || req.query.tokenCaixa || (req.query.token && (req.query.token.startsWith('CX-') || req.query.token.length >= 8) ? req.query.token : null);
+    if (!tokenCaixa && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        const rawToken = req.headers.authorization.split(' ')[1];
+        if (rawToken && (rawToken.startsWith('CX-') || rawToken.length < 50)) {
+            tokenCaixa = rawToken;
+        }
+    }
+    if (tokenCaixa) {
+        try {
+            const caixaFound = await prisma.pdv_caixas.findFirst({
+                where: { token_conexao: String(tokenCaixa), ativo: true }
+            });
+            if (caixaFound) {
+                req.tenantId = Number(caixaFound.tenant_id);
+                req.user = {
+                    id_usuario: 'PDV_CAIXA',
+                    is_dono: true,
+                    isAdmin: true,
+                    role: 'ADMIN',
+                    id_tenant: req.tenantId,
+                    nome_completo: caixaFound.nome || 'PDV Desktop',
+                    email: 'pdv@azun.com.br',
+                    cargoNome: 'Terminal PDV Caixa',
+                    permissoes: ['ALL', 'ENTREGAS_MAPA_VIEW', 'PEDIDOS_VIEW', 'PEDIDOS_MANAGE', 'PDV_ENTREGAS_MAPA', 'PDV_ACCESS']
+                };
+                return next();
+            }
+        } catch (e) {
+            console.error('[AUTH] Erro ao validar token do caixa:', e.message);
+        }
+    }
+
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
             token = req.headers.authorization.split(' ')[1];
