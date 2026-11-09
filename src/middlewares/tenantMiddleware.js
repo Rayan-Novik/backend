@@ -115,13 +115,18 @@ export const tenantResolver = async (req, res, next) => {
             '/api/pdv/caixas/mesas',
             '/caixas/disparar-carga',
             '/api/pdv/caixas/disparar-carga',
+            '/caixas/modulos',
+            '/api/pdv/caixas/modulos',
+            '/modulos-config',
             '/api/sync/movimento',
             '/sync/movimento',
             '/api/sync/catalogo',
             '/sync/catalogo',
             '/fiscal',
             '/tabelas-fiscais',
-            '/driver'
+            '/driver',
+            '/entregas',
+            '/pedidos'
         ];
         
         const isPublicRoute = rotasLivres.some(rota => req.originalUrl.includes(rota));
