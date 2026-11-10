@@ -270,6 +270,7 @@ export class NFeService {
         total: Number(nota.valor_total_nota)
       },
       pagamento_codigo: codigoPagamentoSefaz,
+      pagamentos: (extras && Array.isArray(extras.pagamentos) && extras.pagamentos.length > 0) ? extras.pagamentos : null,
       password: senhaStr
     };
 
@@ -661,6 +662,7 @@ export class NFeService {
       apenas_salvar: extras.apenas_salvar || false,
       contingencia: extras.contingencia || false,
       pagamento_codigo: codigoPagamentoSefaz,
+      pagamentos: (extras && Array.isArray(extras.pagamentos) && extras.pagamentos.length > 0) ? extras.pagamentos : null,
       password: senhaStr
     };
 

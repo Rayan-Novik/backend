@@ -374,7 +374,8 @@ export const registrarVendaPDV = async (req, res, next) => {
             ambiente_fiscal = null,
             cpf_cnpj_nota = null,
             nome_nota = null,
-            desconto = 0
+            desconto = 0,
+            pagamentos_multiplos = null
         } = req.body;
         const id_tenant = req.tenantId;
         const id_usuario_logado = await obterIdUsuarioReal(req.user, id_tenant);
@@ -457,6 +458,15 @@ export const registrarVendaPDV = async (req, res, next) => {
             idClienteFinal = consumidorPadrao.id_usuario;
         }
 
+        let metodoPagamentoFinal = metodo_pagamento || 'DINHEIRO';
+        if (Array.isArray(pagamentos_multiplos) && pagamentos_multiplos.length > 0) {
+            if (pagamentos_multiplos.length === 1) {
+                metodoPagamentoFinal = pagamentos_multiplos[0].descricao || pagamentos_multiplos[0].metodo || 'DINHEIRO';
+            } else {
+                metodoPagamentoFinal = 'MÚLTIPLO';
+            }
+        }
+
         const venda = await prisma.$transaction(async (tx) => {
             const novoPedido = await tx.pedidos.create({
                 data: {
@@ -465,7 +475,7 @@ export const registrarVendaPDV = async (req, res, next) => {
                     preco_total: totalLiquido,
                     preco_itens: Number(totalVenda.toFixed(2)),
                     preco_frete: 0,
-                    metodo_pagamento: metodo_pagamento || 'DINHEIRO',
+                    metodo_pagamento: metodoPagamentoFinal,
                     status_pagamento: 'PAGO',
                     status_entrega: 'Entregue',
                     canal_venda: 'PDV',
@@ -558,15 +568,31 @@ export const registrarVendaPDV = async (req, res, next) => {
 
         try {
             await gerarRecebivelDePedido(venda, id_tenant);
-            await registrarEntradaFinanceira({
-                id_pedido: venda.id_pedido,
-                id_usuario: idClienteFinal,
-                gateway_provider: 'PDV',
-                gateway_id: `PDV-${venda.id_pedido}`,
-                valor_bruto: totalLiquido,
-                valor_taxa_real: 0,
-                id_tenant
-            });
+            if (Array.isArray(pagamentos_multiplos) && pagamentos_multiplos.length > 1) {
+                for (let idx = 0; idx < pagamentos_multiplos.length; idx++) {
+                    const pg = pagamentos_multiplos[idx];
+                    await registrarEntradaFinanceira({
+                        id_pedido: venda.id_pedido,
+                        id_usuario: idClienteFinal,
+                        gateway_provider: 'PDV',
+                        gateway_id: `PDV-${venda.id_pedido}-${idx + 1}`,
+                        tipo: pg.descricao || pg.metodo || 'PDV',
+                        valor_bruto: Number(pg.valor),
+                        valor_taxa_real: 0,
+                        id_tenant
+                    });
+                }
+            } else {
+                await registrarEntradaFinanceira({
+                    id_pedido: venda.id_pedido,
+                    id_usuario: idClienteFinal,
+                    gateway_provider: 'PDV',
+                    gateway_id: `PDV-${venda.id_pedido}`,
+                    valor_bruto: totalLiquido,
+                    valor_taxa_real: 0,
+                    id_tenant
+                });
+            }
         } catch (finError) {
             console.error("⚠️ Erro ao registrar financeiro do PDV:", finError);
         }
@@ -583,7 +609,7 @@ export const registrarVendaPDV = async (req, res, next) => {
                     id_tenant,
                     pedido: venda,
                     itensParaSalvar,
-                    metodo_pagamento,
+                    metodo_pagamento: metodoPagamentoFinal,
                     forma_pagamento_id,
                     caixa_id,
                     serie_numero,
@@ -594,7 +620,8 @@ export const registrarVendaPDV = async (req, res, next) => {
                     tipo_documento_fiscal,
                     cenario_id,
                     ambiente_fiscal,
-                    descontoVenda
+                    descontoVenda,
+                    pagamentos_multiplos
                 });
             } catch (fiscalErr) {
                 console.error("❌ Erro ao emitir nota no PDV:", fiscalErr.message);
@@ -631,7 +658,8 @@ export const processarEmissaoFiscalVendaPDV = async ({
     estabelecimento_id = null,
     cenario_id = null,
     ambiente_fiscal = null,
-    descontoVenda = 0
+    descontoVenda = 0,
+    pagamentos_multiplos = null
 }) => {
     const tenantStr = String(id_tenant);
 
@@ -759,6 +787,14 @@ export const processarEmissaoFiscalVendaPDV = async ({
         };
     });
 
+    let pagamentosSefaz = null;
+    if (Array.isArray(pagamentos_multiplos) && pagamentos_multiplos.length > 0) {
+        pagamentosSefaz = pagamentos_multiplos.map(pg => ({
+            codigo: pg.codigo_sefaz || pg.codigo || MAP_PDV_TO_SEFAZ[pg.metodo] || '01',
+            valor: Number(pg.valor)
+        }));
+    }
+
     return await NFeService.emitir({
         tenant_id: tenantStr,
         estabelecimento_id: estab.id,
@@ -773,7 +809,8 @@ export const processarEmissaoFiscalVendaPDV = async ({
         apenas_salvar: false,
         contingencia: false,
         id_pedido: Number(pedido.id_pedido),
-        itens: itensFiscal
+        itens: itensFiscal,
+        pagamentos: pagamentosSefaz
     });
 };
 

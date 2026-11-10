@@ -499,17 +499,29 @@ try {
                 // PAGAMENTO
         $stdPag = new \stdClass();
         $nfe->tagpag($stdPag);
-        $stdDetPag = new \stdClass();
         
         $fin = $stdIde->finNFe ?? 1;
         if ($fin == 4 || $fin == 2 || $fin == 3) {
+            $stdDetPag = new \stdClass();
             $stdDetPag->tPag = '90'; // Sem Pagamento
             $stdDetPag->vPag = 0.00;
+            $nfe->tagdetPag($stdDetPag);
+        } else if (!empty($payload['pagamentos']) && is_array($payload['pagamentos'])) {
+            // Múltiplas formas de pagamento para SEFAZ
+            foreach ($payload['pagamentos'] as $pg) {
+                $stdDetPag = new \stdClass();
+                $stdDetPag->tPag = str_pad($pg['codigo'] ?? '01', 2, '0', STR_PAD_LEFT);
+                $stdDetPag->vPag = (float)($pg['valor'] ?? 0);
+                if ($stdDetPag->vPag > 0) {
+                    $nfe->tagdetPag($stdDetPag);
+                }
+            }
         } else {
+            $stdDetPag = new \stdClass();
             $stdDetPag->tPag = str_pad($payload['pagamento_codigo'] ?? '01', 2, '0', STR_PAD_LEFT);
             $stdDetPag->vPag = $payload['totais']['total'] ?? $payload['totais']['bruto'];
+            $nfe->tagdetPag($stdDetPag);
         }
-        $nfe->tagdetPag($stdDetPag);
         
         $xml = $nfe->montaNFe();
           if (!empty($xml) && empty($nfe->getErrors())) {

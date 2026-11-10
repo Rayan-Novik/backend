@@ -1041,19 +1041,24 @@ export const getDeliveryDataByToken = async (req, res, next) => {
 export const updatePedidoStatus = async (req, res, next) => {
     try {
         const id_pedido = Number(req.params.id);
-        const { status_entrega } = req.body;
+        const { status_entrega, status_pagamento } = req.body;
         const id_tenant = req.tenantId;
 
         const pedido = await PedidoModel.findById(id_pedido, undefined, id_tenant);
 
         if (pedido) {
+            const dataToUpdate = {};
+            if (status_entrega) dataToUpdate.status_entrega = status_entrega;
+            if (status_pagamento) dataToUpdate.status_pagamento = status_pagamento;
+
             await prisma.pedidos.updateMany({
-                where: { id_pedido: id_pedido, id_tenant: id_tenant }, data: { status_entrega }
+                where: { id_pedido: id_pedido, id_tenant: id_tenant }, 
+                data: dataToUpdate
             });
 
             if (status_entrega === 'Pronto para Retirada') await notificarCliente(pedido, 'PRONTO_RETIRADA', id_tenant);
 
-            res.json({ message: "Status atualizado com sucesso." });
+            res.json({ message: "Status atualizado com sucesso.", status_entrega, status_pagamento });
         } else {
             res.status(404).json({ message: 'Pedido não encontrado' });
         }
