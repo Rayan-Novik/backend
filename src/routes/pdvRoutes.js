@@ -84,7 +84,8 @@ router.get('/modulos-config', protect, requirePermission('PDV_ACCESS'), obterMod
 router.put('/modulos-config', protect, requirePermission('PDV_ACCESS'), atualizarModulosConfigPDV);
 
 // 🔒 GESTÃO DE SESSÕES EXCLUSIVAS (DESKTOP .EXE vs PDV WEB)
-router.get('/caixas/status-sessao/:id?', obterStatusSessaoCaixa);
+router.get('/caixas/status-sessao', obterStatusSessaoCaixa);
+router.get('/caixas/status-sessao/:id', obterStatusSessaoCaixa);
 router.post('/caixas/iniciar-sessao', iniciarSessaoCaixa);
 router.post('/caixas/assumir', assumirSessaoCaixa);
 router.post('/caixas/heartbeat', heartbeatSessaoCaixa);
