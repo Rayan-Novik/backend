@@ -22,10 +22,20 @@ import {
     obterCargaSyncCaixa,
     vincularCaixaPDV,
     obterMesasSync,
+    liberarMesaCaixa,
     cancelarVendaPDV,
     obterModulosConfigPDV,
     atualizarModulosConfigPDV,
-    obterModulosConfigCaixaPublico
+    obterModulosConfigCaixaPublico,
+    validarEVincularCaixa,
+    recincronizarHwidCaixa,
+    desvincularHwidCaixa,
+    obterVersaoPDV,
+    obterStatusSessaoCaixa,
+    iniciarSessaoCaixa,
+    assumirSessaoCaixa,
+    heartbeatSessaoCaixa,
+    encerrarSessaoCaixa
 } from '../controllers/vendaslocais/pdvController.js';
 
 import { protect } from '../middlewares/authMiddleware.js';
@@ -55,6 +65,10 @@ router.get('/imprimir/a4/:id', protect, requirePermission('PDV_ACCESS'), gerarPd
 router.post('/imprimir/termica/:id', protect, requirePermission('PDV_ACCESS'), imprimirTermicaCaixa);
 
 // 📦 GESTÃO DE TERMINAIS E CAIXAS DO PDV (COM SÉRIES NFC-E)
+router.get('/versao', obterVersaoPDV);
+router.post('/caixas/validar-vincular', validarEVincularCaixa);
+router.post('/caixas/recincronizar-hwid', recincronizarHwidCaixa);
+router.post('/caixas/:id/desvincular-hwid', protect, requirePermission('PDV_ACCESS'), desvincularHwidCaixa);
 router.get('/caixas', protect, requirePermission('PDV_ACCESS'), listarCaixasPDV);
 router.post('/caixas', protect, requirePermission('PDV_ACCESS'), criarCaixaPDV);
 router.put('/caixas/:id', protect, requirePermission('PDV_ACCESS'), atualizarCaixaPDV);
@@ -64,9 +78,17 @@ router.post('/caixas/disparar-carga', protect, requirePermission('PDV_ACCESS'), 
 router.get('/caixas/carga-sync', obterCargaSyncCaixa);
 router.post('/caixas/vincular', vincularCaixaPDV);
 router.get('/caixas/mesas', obterMesasSync);
+router.post('/caixas/mesas/liberar', liberarMesaCaixa);
 router.get('/caixas/modulos', obterModulosConfigCaixaPublico);
 router.get('/modulos-config', protect, requirePermission('PDV_ACCESS'), obterModulosConfigPDV);
 router.put('/modulos-config', protect, requirePermission('PDV_ACCESS'), atualizarModulosConfigPDV);
+
+// 🔒 GESTÃO DE SESSÕES EXCLUSIVAS (DESKTOP .EXE vs PDV WEB)
+router.get('/caixas/status-sessao/:id?', obterStatusSessaoCaixa);
+router.post('/caixas/iniciar-sessao', iniciarSessaoCaixa);
+router.post('/caixas/assumir', assumirSessaoCaixa);
+router.post('/caixas/heartbeat', heartbeatSessaoCaixa);
+router.post('/caixas/desconectar', encerrarSessaoCaixa);
 
 
 // --- ACESSOS FINANCEIROS (Ações sensíveis no caixa) ---

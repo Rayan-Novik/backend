@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { decrypt, encrypt } from '../../services/cryptoService.js';
 import { registrarEntradaFinanceira, gerarRecebivelDePedido } from '../../services/financialService.js';
@@ -621,7 +622,9 @@ export const registrarVendaPDV = async (req, res, next) => {
                     cenario_id,
                     ambiente_fiscal,
                     descontoVenda,
-                    pagamentos_multiplos
+                    pagamentos_multiplos,
+                    origem: req.body.origem || req.headers['x-origem'] || 'BALCAO',
+                    ambiente: req.body.ambiente || (req.headers['x-token-caixa'] ? 'EXE' : 'WEB')
                 });
             } catch (fiscalErr) {
                 console.error("❌ Erro ao emitir nota no PDV:", fiscalErr.message);
@@ -659,11 +662,17 @@ export const processarEmissaoFiscalVendaPDV = async ({
     cenario_id = null,
     ambiente_fiscal = null,
     descontoVenda = 0,
-    pagamentos_multiplos = null
+    pagamentos_multiplos = null,
+    origem = null,
+    ambiente = null
 }) => {
     const tenantStr = String(id_tenant);
 
     // 1. Resolução da Série NFC-e vinculada ao Caixa (Ex: Caixa 1 -> Série 1, Caixa 2 -> Série 2)
+    // REGRA SEFAZ:
+    // - Desktop (.EXE): Série = numero_caixa (Caixa 1 = Série 1, Caixa 2 = Série 2)
+    // - Web (Navegador): Série = 50 + numero_caixa (Caixa 1 = Série 51, Caixa 2 = Série 52)
+    const isWeb = String(origem || ambiente || '').toUpperCase() === 'WEB';
     let serieAlvo = serie_numero ? Number(serie_numero) : null;
     let serieIdAlvo = null;
 
@@ -673,13 +682,19 @@ export const processarEmissaoFiscalVendaPDV = async ({
             include: { serie: true }
         });
         if (cx) {
-            if (cx.serie_id) {
-                serieIdAlvo = cx.serie_id;
-                serieAlvo = cx.serie?.serie || cx.numero_caixa || 1;
-            } else if (cx.numero_caixa) {
-                serieAlvo = cx.numero_caixa;
+            const numCaixa = cx.numero_caixa || 1;
+            serieAlvo = isWeb ? (50 + numCaixa) : (serie_numero ? Number(serie_numero) : numCaixa);
+
+            const estabId = estabelecimento_id || cx.estabelecimento_id;
+            const serieFiscal = await prisma.fiscal_series.findFirst({
+                where: { estabelecimento_id: estabId, modelo: '65', serie: serieAlvo }
+            });
+            if (serieFiscal) {
+                serieIdAlvo = serieFiscal.id;
             }
         }
+    } else if (isWeb && (!serieAlvo || serieAlvo < 50)) {
+        serieAlvo = 51;
     }
 
     const MAP_PDV_TO_RULE = {
@@ -860,7 +875,9 @@ export const emitirNotaDeVendaPDV = async (req, res) => {
             tipo_documento_fiscal,
             cenario_id,
             ambiente_fiscal,
-            descontoVenda
+            descontoVenda,
+            origem: req.body.origem || req.headers['x-origem'] || 'BALCAO',
+            ambiente: req.body.ambiente || (req.headers['x-token-caixa'] ? 'EXE' : 'WEB')
         });
 
         res.status(200).json({ message: "Documento fiscal processado!", nota_fiscal: notaEmitida });
@@ -1320,8 +1337,85 @@ const gerarTokenCaixa = () => {
     return 'CX-' + crypto.randomBytes(4).toString('hex').toUpperCase().match(/.{1,4}/g).join('-');
 };
 
+export const garantirSeriesCaixa = async (tenantStr, estabelecimentoId, numeroCaixa, ultimoNumero = 0) => {
+    const num = Number(numeroCaixa) || 1;
+    const serieExeNum = num;
+    const serieWebNum = 50 + num;
+
+    // 1. Série Desktop (.EXE): número do caixa (Caixa 1 = Série 1, Caixa 2 = Série 2, ...)
+    let serieExe = await prisma.fiscal_series.findFirst({
+        where: { estabelecimento_id: estabelecimentoId, modelo: '65', serie: serieExeNum },
+        include: { numeracoes: true }
+    });
+    if (!serieExe) {
+        serieExe = await prisma.fiscal_series.create({
+            data: {
+                tenant_id: tenantStr,
+                estabelecimento_id: estabelecimentoId,
+                modelo: '65',
+                serie: serieExeNum,
+                ativo: true
+            }
+        });
+        const numRec = await prisma.fiscal_numeracoes.create({
+            data: {
+                tenant_id: tenantStr,
+                serie_id: serieExe.id,
+                ultimo_numero: Math.max(0, Number(ultimoNumero) || 0)
+            }
+        });
+        serieExe.numeracoes = numRec;
+    } else if (!serieExe.numeracoes) {
+        const numRec = await prisma.fiscal_numeracoes.create({
+            data: {
+                tenant_id: tenantStr,
+                serie_id: serieExe.id,
+                ultimo_numero: Math.max(0, Number(ultimoNumero) || 0)
+            }
+        });
+        serieExe.numeracoes = numRec;
+    }
+
+    // 2. Série Navegador (Web): 50 + número do caixa (Caixa 1 = Série 51, Caixa 2 = Série 52, ...)
+    let serieWeb = await prisma.fiscal_series.findFirst({
+        where: { estabelecimento_id: estabelecimentoId, modelo: '65', serie: serieWebNum },
+        include: { numeracoes: true }
+    });
+    if (!serieWeb) {
+        serieWeb = await prisma.fiscal_series.create({
+            data: {
+                tenant_id: tenantStr,
+                estabelecimento_id: estabelecimentoId,
+                modelo: '65',
+                serie: serieWebNum,
+                ativo: true
+            }
+        });
+        const numRec = await prisma.fiscal_numeracoes.create({
+            data: {
+                tenant_id: tenantStr,
+                serie_id: serieWeb.id,
+                ultimo_numero: 0
+            }
+        });
+        serieWeb.numeracoes = numRec;
+    } else if (!serieWeb.numeracoes) {
+        const numRec = await prisma.fiscal_numeracoes.create({
+            data: {
+                tenant_id: tenantStr,
+                serie_id: serieWeb.id,
+                ultimo_numero: 0
+            }
+        });
+        serieWeb.numeracoes = numRec;
+    }
+
+    return { serieExe, serieWeb };
+};
+
 export const listarCaixasPDV = async (req, res, next) => {
     try {
+        await garantirTabelaPdvSessoes();
         const id_tenant = req.tenantId;
         const tenantStr = String(id_tenant);
 
@@ -1352,38 +1446,9 @@ export const listarCaixasPDV = async (req, res, next) => {
             orderBy: { numero_caixa: 'asc' }
         });
 
-        // Auto-seed: se não existir nenhum caixa, cria automaticamente o Caixa 01 vinculado à Série 1
+        // Auto-seed: se não existir nenhum caixa, cria automaticamente o Caixa 01 vinculado à Série 1 (.exe) e Série 51 (web)
         if (caixas.length === 0 && estab) {
-            let serie1 = await prisma.fiscal_series.findFirst({
-                where: { estabelecimento_id: estab.id, modelo: '65', serie: 1 },
-                include: { numeracoes: true }
-            });
-            if (!serie1) {
-                serie1 = await prisma.fiscal_series.create({
-                    data: {
-                        tenant_id: tenantStr,
-                        estabelecimento_id: estab.id,
-                        modelo: '65',
-                        serie: 1,
-                        ativo: true
-                    }
-                });
-                await prisma.fiscal_numeracoes.create({
-                    data: {
-                        tenant_id: tenantStr,
-                        serie_id: serie1.id,
-                        ultimo_numero: 0
-                    }
-                });
-            } else if (!serie1.numeracoes) {
-                await prisma.fiscal_numeracoes.create({
-                    data: {
-                        tenant_id: tenantStr,
-                        serie_id: serie1.id,
-                        ultimo_numero: 0
-                    }
-                });
-            }
+            const { serieExe } = await garantirSeriesCaixa(tenantStr, estab.id, 1, 0);
 
             const novoCaixa1 = await prisma.pdv_caixas.create({
                 data: {
@@ -1391,7 +1456,7 @@ export const listarCaixasPDV = async (req, res, next) => {
                     estabelecimento_id: estab.id,
                     nome: 'Caixa 01 - Principal',
                     numero_caixa: 1,
-                    serie_id: serie1.id,
+                    serie_id: serieExe.id,
                     token_conexao: gerarTokenCaixa(),
                     ativo: true
                 },
@@ -1403,7 +1468,7 @@ export const listarCaixasPDV = async (req, res, next) => {
             caixas = [novoCaixa1];
         }
 
-        // Garante que todo caixa existente tenha um token gerado
+        // Garante que todo caixa existente tenha um token gerado e ambas as séries criadas
         for (const c of caixas) {
             if (!c.token_conexao) {
                 const tokenGerado = gerarTokenCaixa();
@@ -1413,23 +1478,56 @@ export const listarCaixasPDV = async (req, res, next) => {
                 });
                 c.token_conexao = tokenGerado;
             }
+            if (estab) {
+                await garantirSeriesCaixa(tenantStr, estab.id, c.numero_caixa);
+            }
         }
 
-        const formatados = caixas.map(c => ({
-            id: c.id,
-            nome: c.nome,
-            numero_caixa: c.numero_caixa,
-            ativo: c.ativo,
-            estabelecimento_id: c.estabelecimento_id,
-            serie_id: c.serie_id,
-            serie_numero: c.serie?.serie || c.numero_caixa,
-            modelo: c.serie?.modelo || '65',
-            ultimo_numero: c.serie?.numeracoes?.ultimo_numero ?? 0,
-            proximo_numero: (c.serie?.numeracoes?.ultimo_numero ?? 0) + 1,
-            tem_turno_aberto: Boolean(c.turnos && c.turnos.length > 0),
-            token_conexao: c.token_conexao,
-            hardware_id: c.hardware_id,
-            dispositivo_vinculado: Boolean(c.hardware_id)
+        const formatados = await Promise.all(caixas.map(async (c) => {
+            const serieExeNum = c.numero_caixa;
+            const serieWebNum = 50 + c.numero_caixa;
+
+            let serieExe = null;
+            let serieWeb = null;
+
+            if (estab) {
+                serieExe = await prisma.fiscal_series.findFirst({
+                    where: { estabelecimento_id: estab.id, modelo: '65', serie: serieExeNum },
+                    include: { numeracoes: true }
+                });
+                serieWeb = await prisma.fiscal_series.findFirst({
+                    where: { estabelecimento_id: estab.id, modelo: '65', serie: serieWebNum },
+                    include: { numeracoes: true }
+                });
+            }
+
+            const sessaoAtual = sessoesAtivasMap.get(c.id);
+
+            return {
+                id: c.id,
+                nome: c.nome,
+                numero_caixa: c.numero_caixa,
+                ativo: c.ativo,
+                estabelecimento_id: c.estabelecimento_id,
+                serie_id: c.serie_id,
+                serie_numero: c.numero_caixa, // Default EXE
+                serie_exe: serieExeNum,
+                ultimo_numero_exe: serieExe?.numeracoes?.ultimo_numero ?? 0,
+                proximo_numero_exe: (serieExe?.numeracoes?.ultimo_numero ?? 0) + 1,
+                serie_web: serieWebNum,
+                ultimo_numero_web: serieWeb?.numeracoes?.ultimo_numero ?? 0,
+                proximo_numero_web: (serieWeb?.numeracoes?.ultimo_numero ?? 0) + 1,
+                modelo: '65',
+                ultimo_numero: (c.serie?.numeracoes?.ultimo_numero ?? 0),
+                proximo_numero: (c.serie?.numeracoes?.ultimo_numero ?? 0) + 1,
+                tem_turno_aberto: Boolean(c.turnos && c.turnos.length > 0),
+                token_conexao: c.token_conexao,
+                hardware_id: c.hardware_id,
+                dispositivo_vinculado: Boolean(c.hardware_id),
+                ambiente_ativo: sessaoAtual?.ambiente_ativo || null,
+                operador_ativo_nome: sessaoAtual?.operador_nome || null,
+                operador_ativo_id: sessaoAtual?.operador_id || null
+            };
         }));
 
         res.json({
@@ -1477,48 +1575,13 @@ export const criarCaixaPDV = async (req, res, next) => {
 
         // Determina número do caixa
         const numCaixa = Number(numero_caixa) || (totalCaixasAtuais + 1);
-        const serieNum = Number(serie_numero) || numCaixa;
         const nomeCaixa = nome ? String(nome).trim() : `Caixa ${String(numCaixa).padStart(2, '0')}`;
 
-        // 3. Garante ou cria a Série NFC-e correspondente (Modelo 65, Série = serieNum)
-        let serie = await prisma.fiscal_series.findFirst({
-            where: { estabelecimento_id: estab.id, modelo: '65', serie: serieNum },
-            include: { numeracoes: true }
-        });
-
-        if (!serie) {
-            serie = await prisma.fiscal_series.create({
-                data: {
-                    tenant_id: tenantStr,
-                    estabelecimento_id: estab.id,
-                    modelo: '65',
-                    serie: serieNum,
-                    ativo: true
-                }
-            });
-            await prisma.fiscal_numeracoes.create({
-                data: {
-                    tenant_id: tenantStr,
-                    serie_id: serie.id,
-                    ultimo_numero: Math.max(0, Number(ultimo_numero) || 0)
-                }
-            });
-        } else {
-            if (!serie.numeracoes) {
-                await prisma.fiscal_numeracoes.create({
-                    data: {
-                        tenant_id: tenantStr,
-                        serie_id: serie.id,
-                        ultimo_numero: Math.max(0, Number(ultimo_numero) || 0)
-                    }
-                });
-            } else if (ultimo_numero !== undefined && Number(ultimo_numero) > 0) {
-                await prisma.fiscal_numeracoes.update({
-                    where: { serie_id: serie.id },
-                    data: { ultimo_numero: Number(ultimo_numero) }
-                });
-            }
-        }
+        // 3. Garante ou cria as Séries NFC-e correspondentes (Modelo 65)
+        // Caixa 1 -> Série 1 (.exe) e Série 51 (web)
+        // Caixa 2 -> Série 2 (.exe) e Série 52 (web)
+        const { serieExe, serieWeb } = await garantirSeriesCaixa(tenantStr, estab.id, numCaixa, ultimo_numero);
+        const serie = serieExe;
 
         // 4. Gera o Token Único do Caixa
         const tokenConexao = gerarTokenCaixa();
@@ -1862,7 +1925,11 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
             where: { id_tenant: Number(id_tenant) },
             include: {
                 pedidos: {
-                    where: { status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO'] } },
+                    where: { 
+                        status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO', 'FECHANDO'] },
+                        status_pagamento: { not: 'CANCELADO' }
+                    },
+                    orderBy: { id_pedido: 'desc' },
                     include: {
                         pedido_items: true
                     }
@@ -1871,10 +1938,26 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
             orderBy: { id_mesa: 'asc' }
         });
 
-        const mesasFormatadas = mesasDb.map(m => {
+        const mesasFormatadas = [];
+        for (const m of mesasDb) {
             let valorTotal = 0;
             let itensMesa = [];
             let pedidoAtivo = m.pedidos && m.pedidos.length > 0 ? m.pedidos[0] : null;
+
+            let statusReal = m.status;
+            if (!pedidoAtivo || pedidoAtivo.status_pagamento === 'CANCELADO') {
+                if (statusReal === 'OCUPADA') {
+                    await prisma.mesas.update({
+                        where: { id_mesa: m.id_mesa },
+                        data: { status: 'LIVRE', mesa_agrupada: null }
+                    }).catch(() => {});
+                    statusReal = 'LIVRE';
+                }
+                pedidoAtivo = null;
+            } else {
+                statusReal = 'OCUPADA';
+            }
+
             if (pedidoAtivo) {
                 valorTotal = Number(pedidoAtivo.preco_total || pedidoAtivo.total_pedido || 0);
                 if (pedidoAtivo.pedido_items) {
@@ -1887,19 +1970,19 @@ export const dispararCargaCaixasPDV = async (req, res, next) => {
                 }
             }
             const num = parseInt(m.nome.replace(/\D/g, '')) || m.id_mesa;
-            return {
+            mesasFormatadas.push({
                 id: m.id_mesa,
                 id_mesa: m.id_mesa,
                 numero: num,
                 nome: m.nome,
-                status: m.status || (pedidoAtivo ? 'OCUPADA' : 'LIVRE'),
+                status: statusReal || (pedidoAtivo ? 'OCUPADA' : 'LIVRE'),
                 valor: valorTotal,
                 id_pedido: pedidoAtivo ? pedidoAtivo.id_pedido : 0,
                 itens: itensMesa,
                 tempo: (pedidoAtivo?.data_pedido || pedidoAtivo?.criado_em) ? Math.round((Date.now() - new Date(pedidoAtivo.data_pedido || pedidoAtivo.criado_em).getTime()) / 60000) + 'm' : '--',
                 garcom: '--'
-            };
-        });
+            });
+        }
 
         // 5. Busca configurações visuais e módulos da loja
         const configsDb = await prisma.configuracoes.findMany({
@@ -2011,21 +2094,34 @@ export const obterCargaSyncCaixa = async (req, res, next) => {
             return res.status(404).json({ message: "Nenhum caixa encontrado para sincronizar." });
         }
 
-        // 🟢 ATUALIZAÇÃO AUTOMÁTICA DE VINCULAÇÃO (PAREAMENTO DE HARDWARE):
-        // Sempre que o caixa conecta ou requisita carga, vincula o hardware do terminal
+        // 🛡️ VERIFICAÇÃO DE SEGURANÇA DE HARDWARE (HWID 1:1 ANTI-PIRATARIA / ANTI-USO CONCORRENTE)
+        const hwidRecebido = hwid ? String(hwid).split(' ')[0].trim() : '';
         const hwidStr = hwid ? (computador ? `${hwid} (${computador})` : String(hwid)) : (caixa.hardware_id || 'PAREADO');
-        await prisma.pdv_caixas.update({
-            where: { id: caixa.id },
-            data: {
-                hardware_id: hwidStr,
-                updated_at: new Date()
-            }
-        });
-        caixa.hardware_id = hwidStr;
 
-        // Verifica se há carga gerada para este caixa
+        if (caixa.hardware_id) {
+            const hwidEsperado = caixa.hardware_id.split(' ')[0].trim();
+            if (hwidRecebido && hwidEsperado && hwidRecebido !== hwidEsperado) {
+                return res.status(403).json({
+                    error: `Acesso negado: Este caixa já está vinculado a outro computador (${caixa.hardware_id}).`,
+                    code: "HWID_BLOQUEADO",
+                    hardware_cadastrado: caixa.hardware_id
+                });
+            }
+        } else if (hwid) {
+            // Se estava livre (desvinculado), vincula à máquina atual
+            await prisma.pdv_caixas.update({
+                where: { id: caixa.id },
+                data: {
+                    hardware_id: hwidStr,
+                    updated_at: new Date()
+                }
+            });
+            caixa.hardware_id = hwidStr;
+        }
+
+        // Verifica se há carga gerada pendente para este caixa
         const cargas = await prisma.$queryRawUnsafe(
-            `SELECT id, dados_json, versao FROM pdv_cargas_sync WHERE caixa_id = ? AND tenant_id = ? ORDER BY disparado_em DESC LIMIT 1`,
+            `SELECT id, dados_json, versao FROM pdv_cargas_sync WHERE caixa_id = ? AND tenant_id = ? AND status = 'PENDENTE' ORDER BY disparado_em DESC LIMIT 1`,
             caixa.id, tenantStr
         );
 
@@ -2036,10 +2132,15 @@ export const obterCargaSyncCaixa = async (req, res, next) => {
                 carga.id
             );
 
-            return res.json(JSON.parse(carga.dados_json));
+            const dados = JSON.parse(carga.dados_json);
+            // 🟢 Injeta mesas sempre em tempo real para não carregar dados defasados
+            const mesasVivas = await obterMesasDbFormatadas(id_tenant);
+            dados.mesas = mesasVivas;
+            dados.total_mesas = mesasVivas.length;
+            return res.json(dados);
         }
 
-        // Se não houver carga disparada, gera na hora com base no banco principal
+        // Se não houver carga disparada pendente, gera na hora com base no banco principal
         const fakeReq = { tenantId: id_tenant, body: { caixas_ids: [caixa.id] } };
         const fakeRes = { json: () => {} };
         await dispararCargaCaixasPDV(fakeReq, fakeRes, () => {});
@@ -2050,7 +2151,11 @@ export const obterCargaSyncCaixa = async (req, res, next) => {
         );
 
         if (novaCarga && novaCarga.length > 0) {
-            return res.json(JSON.parse(novaCarga[0].dados_json));
+            const dados = JSON.parse(novaCarga[0].dados_json);
+            const mesasVivas = await obterMesasDbFormatadas(id_tenant);
+            dados.mesas = mesasVivas;
+            dados.total_mesas = mesasVivas.length;
+            return res.json(dados);
         }
 
         return res.json({ produtos: [], categorias: [], formas_pagamento: [], mesas: [] });
@@ -2078,6 +2183,18 @@ export const vincularCaixaPDV = async (req, res, next) => {
             return res.status(404).json({ error: "Caixa não encontrado com o token fornecido." });
         }
 
+        const hwidRecebido = String(hwid).split(' ')[0].trim();
+        if (caixa.hardware_id) {
+            const hwidAtual = caixa.hardware_id.split(' ')[0].trim();
+            if (hwidRecebido && hwidAtual && hwidRecebido !== hwidAtual) {
+                return res.status(403).json({
+                    error: `Este caixa já está vinculado a outro computador (${caixa.hardware_id}). Desvincule no painel web ou utilize a recincronização.`,
+                    code: "HWID_BLOQUEADO",
+                    hardware_atual: caixa.hardware_id
+                });
+            }
+        }
+
         const hwidStr = `${hwid} (${computador})`.substring(0, 255);
         await prisma.pdv_caixas.update({
             where: { id: caixa.id },
@@ -2097,6 +2214,362 @@ export const vincularCaixaPDV = async (req, res, next) => {
     }
 };
 
+// ============================================================================
+// 🔒 VALIDAÇÃO RIGOROSA DE CÓDIGO DO CAIXA E TRAVA DE HARDWARE (HWID)
+// ============================================================================
+export const validarEVincularCaixa = async (req, res, next) => {
+    try {
+        const { codigo, hwid, computador } = req.body;
+
+        if (!codigo || typeof codigo !== 'string') {
+            return res.status(400).json({
+                success: false,
+                error: "Código do caixa é obrigatório."
+            });
+        }
+
+        const codigoLimpo = codigo.trim();
+
+        // 1. Validação estrita de formato: não pode ser minúsculo e não pode ser sem os traços (ex: CX-5BB9-97BF)
+        const regexFormato = /^CX-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+        if (!regexFormato.test(codigoLimpo)) {
+            return res.status(400).json({
+                success: false,
+                error: "Formato do código de caixa inválido. O código não pode conter letras minúsculas nem estar sem os traços. Padrão obrigatório: CX-XXXX-XXXX (ex: CX-5BB9-97BF)."
+            });
+        }
+
+        // 2. Consulta no banco de dados para checar se é um caixa real existente
+        const caixa = await prisma.pdv_caixas.findFirst({
+            where: { token_conexao: codigoLimpo }
+        });
+
+        if (!caixa) {
+            return res.status(404).json({
+                success: false,
+                error: `Código de caixa '${codigoLimpo}' não foi encontrado no sistema. Verifique o código cadastrado no painel web da sua loja.`
+            });
+        }
+
+        if (!caixa.ativo) {
+            return res.status(400).json({
+                success: false,
+                error: `O caixa '${caixa.nome}' (${codigoLimpo}) está inativo no sistema.`
+            });
+        }
+
+        // 3. Validação de HWID (Hardware ID Lock 1:1)
+        const hwidRecebido = hwid ? String(hwid).split(' ')[0].trim() : '';
+        const hwidCompleto = `${hwid || 'HWID-DESCONHECIDO'}${computador ? ' (' + computador + ')' : ''}`;
+
+        if (caixa.hardware_id) {
+            const hwidAtual = caixa.hardware_id.split(' ')[0].trim();
+            if (hwidRecebido && hwidAtual && hwidRecebido !== hwidAtual) {
+                return res.status(403).json({
+                    success: false,
+                    code: "HWID_BLOQUEADO",
+                    error: `Este código de caixa já está vinculado a outro computador (${caixa.hardware_id}). Para usar nesta máquina, desvincule o caixa no painel web ou utilize a opção de recincronizar.`,
+                    hardware_atual: caixa.hardware_id
+                });
+            }
+        }
+
+        // Vincula o HWID desta máquina no banco
+        await prisma.pdv_caixas.update({
+            where: { id: caixa.id },
+            data: {
+                hardware_id: hwidCompleto,
+                updated_at: new Date()
+            }
+        });
+
+        // 4. Sincroniza o Tenant
+        const tenant = await prisma.tenants.findUnique({
+            where: { id: Number(caixa.tenant_id) }
+        });
+
+        const estab = await prisma.fiscal_estabelecimentos.findFirst({
+            where: { tenant_id: String(caixa.tenant_id) }
+        });
+
+        return res.json({
+            success: true,
+            message: `Caixa ${caixa.nome} validado e vinculado com sucesso à máquina ${hwidCompleto}!`,
+            caixa: {
+                id: caixa.id,
+                nome: caixa.nome,
+                numero_caixa: caixa.numero_caixa,
+                token_conexao: caixa.token_conexao,
+                hardware_id: hwidCompleto,
+                serie_id: caixa.serie_id
+            },
+            tenant: {
+                id: caixa.tenant_id,
+                nome_fantasia: tenant?.nome_fantasia || 'Empresa',
+                razao_social: tenant?.razao_social || 'Empresa',
+                documento: tenant?.documento || ''
+            },
+            estabelecimento: estab ? {
+                id: estab.id,
+                cnpj: estab.cnpj,
+                razao_social: estab.razao_social,
+                nome_fantasia: estab.nome_fantasia
+            } : null
+        });
+
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ============================================================================
+// 🔄 RECINCRONIZAÇÃO DE MÁQUINA FORMATADA OU NOVO COMPUTADOR (COM SENHA ADMIN)
+// ============================================================================
+export const recincronizarHwidCaixa = async (req, res, next) => {
+    try {
+        const { codigo, email, senha, novo_hwid, computador } = req.body;
+
+        if (!codigo || !email || !senha) {
+            return res.status(400).json({
+                success: false,
+                error: "Código do caixa, e-mail e senha de administrador são obrigatórios para recincronizar."
+            });
+        }
+
+        const codigoLimpo = codigo.trim();
+        const regexFormato = /^CX-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+        if (!regexFormato.test(codigoLimpo)) {
+            return res.status(400).json({
+                success: false,
+                error: "Código de caixa inválido. Padrão obrigatório: CX-XXXX-XXXX (ex: CX-5BB9-97BF)."
+            });
+        }
+
+        const caixa = await prisma.pdv_caixas.findFirst({
+            where: { token_conexao: codigoLimpo }
+        });
+
+        if (!caixa) {
+            return res.status(404).json({
+                success: false,
+                error: "Código de caixa não encontrado no sistema."
+            });
+        }
+
+        const id_tenant = Number(caixa.tenant_id);
+
+        // Autentica as credenciais com o Tenant (Dono) ou Funcionário Admin do Tenant
+        let autenticado = false;
+        let nomeAutorizador = '';
+
+        // 1. Tenta autenticar pelo Tenant (Dono)
+        const tenant = await prisma.tenants.findUnique({
+            where: { id: id_tenant }
+        });
+
+        if (tenant && tenant.email && tenant.email.toLowerCase() === email.trim().toLowerCase() && tenant.hash_senha) {
+            const senhaOk = await bcrypt.compare(senha, tenant.hash_senha);
+            if (senhaOk) {
+                autenticado = true;
+                nomeAutorizador = tenant.nome_fantasia || 'Proprietário';
+            }
+        }
+
+        // 2. Tenta autenticar por funcionário com permissão ADMIN do tenant
+        if (!autenticado) {
+            const funcionario = await prisma.funcionarios.findFirst({
+                where: {
+                    id_tenant: id_tenant,
+                    email: email.trim().toLowerCase(),
+                    OR: [
+                        { role: 'ADMIN' },
+                        { isAdmin: true }
+                    ]
+                }
+            });
+
+            if (funcionario && funcionario.hash_senha) {
+                const senhaOk = await bcrypt.compare(senha, funcionario.hash_senha);
+                if (senhaOk) {
+                    autenticado = true;
+                    nomeAutorizador = funcionario.nome_completo || 'Administrador';
+                }
+            }
+        }
+
+        if (!autenticado) {
+            return res.status(401).json({
+                success: false,
+                error: "Credenciais de administrador inválidas para este estabelecimento. Verifique o e-mail e a senha informados."
+            });
+        }
+
+        // Autorizado! Atualiza o HWID para a nova máquina ou máquina formatada
+        const hwidCompleto = `${novo_hwid || 'HWID-DESCONHECIDO'}${computador ? ' (' + computador + ')' : ''}`;
+        await prisma.pdv_caixas.update({
+            where: { id: caixa.id },
+            data: {
+                hardware_id: hwidCompleto,
+                updated_at: new Date()
+            }
+        });
+
+        const estab = await prisma.fiscal_estabelecimentos.findFirst({
+            where: { tenant_id: String(caixa.tenant_id) }
+        });
+
+        return res.json({
+            success: true,
+            message: `Caixa ${caixa.nome} recincronizado com sucesso por ${nomeAutorizador}! Novo computador vinculado: ${hwidCompleto}`,
+            caixa: {
+                id: caixa.id,
+                nome: caixa.nome,
+                numero_caixa: caixa.numero_caixa,
+                token_conexao: caixa.token_conexao,
+                hardware_id: hwidCompleto
+            },
+            tenant: {
+                id: caixa.tenant_id,
+                nome_fantasia: tenant?.nome_fantasia || 'Empresa',
+                razao_social: tenant?.razao_social || 'Empresa'
+            },
+            estabelecimento: estab ? {
+                id: estab.id,
+                cnpj: estab.cnpj,
+                razao_social: estab.razao_social
+            } : null
+        });
+
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ============================================================================
+// 🔓 DESVINCULAR MÁQUINA (PARA USO NO PAINEL WEB)
+// ============================================================================
+export const desvincularHwidCaixa = async (req, res, next) => {
+    try {
+        const id_tenant = req.tenantId;
+        const tenantStr = String(id_tenant);
+        const { id } = req.params;
+
+        const caixa = await prisma.pdv_caixas.findFirst({
+            where: { id: String(id), tenant_id: tenantStr }
+        });
+
+        if (!caixa) {
+            return res.status(404).json({ message: "Caixa não encontrado." });
+        }
+
+        const hwidAnterior = caixa.hardware_id;
+
+        await prisma.pdv_caixas.update({
+            where: { id: caixa.id },
+            data: {
+                hardware_id: null,
+                updated_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: `Computador (${hwidAnterior || 'nenhum'}) desvinculado com sucesso do ${caixa.nome}! O código ${caixa.token_conexao} está livre para ser pareado em uma nova máquina ou máquina formatada.`
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ============================================================================
+// 🚀 CONTROLE DE VERSÕES E ATUALIZAÇÃO AUTOMÁTICA DO .EXE
+// ============================================================================
+export const obterVersaoPDV = async (req, res) => {
+    res.json({
+        versao_mais_recente: "1.0.1",
+        versao_minima_obrigatoria: "1.0.0",
+        url_download: "https://backcore.azun.com.br/downloads/Instalador_AzunPDV_Setup.exe",
+        tamanho_mb: 5.1,
+        obrigatoria: false,
+        novidades: [
+            "Validação estrita de formato do código de caixa (CX-XXXX-XXXX)",
+            "Consulta em tempo real de existência do caixa e sincronização do Tenant",
+            "Trava de segurança de hardware única (HWID 1:1) anti-pirataria",
+            "Opção de recincronização facilitada para máquinas formatadas ou novos computadores",
+            "Verificação automática de novas atualizações do executável"
+        ],
+        data_lancamento: "2026-11-16T12:00:00Z"
+    });
+};
+
+export const obterMesasDbFormatadas = async (id_tenant) => {
+    const mesasDb = await prisma.mesas.findMany({
+        where: { id_tenant: Number(id_tenant) },
+        include: {
+            pedidos: {
+                where: { 
+                    status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO', 'FECHANDO'] },
+                    status_pagamento: { not: 'CANCELADO' }
+                },
+                orderBy: { id_pedido: 'desc' },
+                include: {
+                    pedido_items: true
+                }
+            }
+        },
+        orderBy: { id_mesa: 'asc' }
+    });
+
+    const mesasFormatadas = [];
+    for (const m of mesasDb) {
+        let valorTotal = 0;
+        let itensMesa = [];
+        let pedidoAtivo = m.pedidos && m.pedidos.length > 0 ? m.pedidos[0] : null;
+
+        // Se a mesa constar como OCUPADA mas não possuir pedido ativo real (ou se o pedido foi cancelado/finalizado), auto-repara para LIVRE
+        let statusReal = m.status;
+        if (!pedidoAtivo || pedidoAtivo.status_pagamento === 'CANCELADO') {
+            if (statusReal === 'OCUPADA') {
+                await prisma.mesas.update({
+                    where: { id_mesa: m.id_mesa },
+                    data: { status: 'LIVRE', mesa_agrupada: null }
+                }).catch(() => {});
+                statusReal = 'LIVRE';
+            }
+            pedidoAtivo = null;
+        } else {
+            statusReal = 'OCUPADA';
+        }
+
+        if (pedidoAtivo) {
+            valorTotal = Number(pedidoAtivo.preco_total || pedidoAtivo.total_pedido || 0);
+            if (pedidoAtivo.pedido_items) {
+                itensMesa = pedidoAtivo.pedido_items.map(pi => ({
+                    id_produto: pi.id_produto,
+                    nome: pi.nome || pi.nome_produto || 'Item',
+                    qtd: Number(pi.quantidade || 1),
+                    preco: Number(pi.preco || pi.preco_unitario || 0)
+                }));
+            }
+        }
+        const num = parseInt(m.nome.replace(/\D/g, '')) || m.id_mesa;
+        mesasFormatadas.push({
+            id: m.id_mesa,
+            id_mesa: m.id_mesa,
+            numero: num,
+            nome: m.nome,
+            status: statusReal || (pedidoAtivo ? 'OCUPADA' : 'LIVRE'),
+            valor: valorTotal,
+            id_pedido: pedidoAtivo ? pedidoAtivo.id_pedido : 0,
+            itens: itensMesa,
+            tempo: (pedidoAtivo?.data_pedido || pedidoAtivo?.criado_em) ? Math.round((Date.now() - new Date(pedidoAtivo.data_pedido || pedidoAtivo.criado_em).getTime()) / 60000) + 'm' : '--',
+            garcom: '--'
+        });
+    }
+
+    return mesasFormatadas;
+};
+
 export const obterMesasSync = async (req, res, next) => {
     try {
         const token = req.query.token || req.headers['x-token-caixa'];
@@ -2109,50 +2582,83 @@ export const obterMesasSync = async (req, res, next) => {
         }
         if (!id_tenant) id_tenant = 1;
 
-        const mesasDb = await prisma.mesas.findMany({
-            where: { id_tenant: Number(id_tenant) },
-            include: {
-                pedidos: {
-                    where: { status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO'] } },
-                    include: {
-                        pedido_items: true
-                    }
-                }
-            },
-            orderBy: { id_mesa: 'asc' }
-        });
-
-        const mesasFormatadas = mesasDb.map(m => {
-            let valorTotal = 0;
-            let itensMesa = [];
-            let pedidoAtivo = m.pedidos && m.pedidos.length > 0 ? m.pedidos[0] : null;
-            if (pedidoAtivo) {
-                valorTotal = Number(pedidoAtivo.preco_total || pedidoAtivo.total_pedido || 0);
-                if (pedidoAtivo.pedido_items) {
-                    itensMesa = pedidoAtivo.pedido_items.map(pi => ({
-                        id_produto: pi.id_produto,
-                        nome: pi.nome || pi.nome_produto || 'Item',
-                        qtd: Number(pi.quantidade || 1),
-                        preco: Number(pi.preco || pi.preco_unitario || 0)
-                    }));
-                }
-            }
-            const num = parseInt(m.nome.replace(/\D/g, '')) || m.id_mesa;
-            return {
-                id: m.id_mesa,
-                id_mesa: m.id_mesa,
-                numero: num,
-                nome: m.nome,
-                status: m.status || (pedidoAtivo ? 'OCUPADA' : 'LIVRE'),
-                valor: valorTotal,
-                id_pedido: pedidoAtivo ? pedidoAtivo.id_pedido : 0,
-                itens: itensMesa,
-                tempo: (pedidoAtivo?.data_pedido || pedidoAtivo?.criado_em) ? Math.round((Date.now() - new Date(pedidoAtivo.data_pedido || pedidoAtivo.criado_em).getTime()) / 60000) + 'm' : '--',
-                garcom: '--'
-            };
-        });
-
+        const mesasFormatadas = await obterMesasDbFormatadas(id_tenant);
         res.json(mesasFormatadas);
+    } catch (err) {
+        next(err);
+    }
+};
+
+export const liberarMesaCaixa = async (req, res, next) => {
+    try {
+        const token = req.body?.token || req.query?.token || req.headers['x-token-caixa'];
+        const { id_mesa, nome, id_pedido } = req.body;
+        let id_tenant = req.tenantId;
+        if (!id_tenant && token) {
+            const caixa = await prisma.pdv_caixas.findFirst({
+                where: { token_conexao: String(token) }
+            });
+            if (caixa) id_tenant = Number(caixa.tenant_id);
+        }
+        if (!id_tenant) id_tenant = 1;
+
+        // 1. Finaliza pedido/comanda associado
+        const condicoesPedido = [];
+        if (id_pedido && Number(id_pedido) > 0) {
+            condicoesPedido.push({ id_pedido: Number(id_pedido) });
+        }
+        if (id_mesa && Number(id_mesa) > 0) {
+            condicoesPedido.push({ id_mesa: Number(id_mesa) });
+        }
+        if (nome) {
+            condicoesPedido.push({ codigo_comanda: String(nome) });
+        }
+
+        if (condicoesPedido.length > 0) {
+            await prisma.pedidos.updateMany({
+                where: {
+                    id_tenant: Number(id_tenant),
+                    OR: condicoesPedido,
+                    status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO', 'FECHANDO'] }
+                },
+                data: {
+                    status_comanda: 'FINALIZADO',
+                    status_pagamento: 'PAGO',
+                    status_entrega: 'Entregue'
+                }
+            }).catch(() => {});
+        }
+
+        // 2. Libera a mesa no MySQL
+        const condicoesMesa = [];
+        if (id_mesa && Number(id_mesa) > 0) {
+            condicoesMesa.push({ id_mesa: Number(id_mesa) });
+        }
+        if (nome) {
+            condicoesMesa.push({ nome: String(nome) });
+            condicoesMesa.push({ mesa_agrupada: String(nome) });
+        }
+
+        if (condicoesMesa.length > 0) {
+            await prisma.mesas.updateMany({
+                where: {
+                    id_tenant: Number(id_tenant),
+                    OR: condicoesMesa
+                },
+                data: {
+                    status: 'LIVRE',
+                    mesa_agrupada: null
+                }
+            }).catch(() => {});
+        }
+
+        // 3. Notifica o painel Web via Socket.IO
+        if (req.app.get('io')) {
+            req.app.get('io').emit('ATUALIZAR_MESAS', { id_tenant });
+            req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
+        }
+
+        res.json({ success: true, message: "Mesa liberada com sucesso no servidor web!" });
     } catch (err) {
         next(err);
     }
@@ -2340,6 +2846,362 @@ export const obterModulosConfigCaixaPublico = async (req, res, next) => {
                 vendas: true
             }
         });
+    } catch (e) {
+        next(e);
+    }
+};
+
+// ============================================================================
+// 🔒 GESTÃO DE SESSÕES EXCLUSIVAS (DESKTOP .EXE vs NAVEGADOR WEB)
+// ============================================================================
+const sessoesAtivasMap = new Map();
+
+export const garantirTabelaPdvSessoes = async () => {
+    try {
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE IF NOT EXISTS pdv_sessoes_ativas (
+                caixa_id VARCHAR(64) NOT NULL PRIMARY KEY,
+                tenant_id VARCHAR(64) NOT NULL,
+                ambiente_ativo VARCHAR(16) NOT NULL,
+                operador_id VARCHAR(64) NULL,
+                operador_nome VARCHAR(255) NULL,
+                operador_codigo VARCHAR(64) NULL,
+                session_token VARCHAR(128) NOT NULL,
+                desconectado TINYINT(1) DEFAULT 0,
+                desconectado_motivo VARCHAR(255) NULL,
+                ultimo_heartbeat DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_sessao_tenant (tenant_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `);
+    } catch (e) {
+        console.warn('[PDV] Aviso ao verificar tabela pdv_sessoes_ativas:', e.message);
+    }
+};
+
+const validarSenhaOperador = async (tenantId, senha, operadorIdAtivo) => {
+    if (!senha) return { valido: false };
+    const tenantNum = Number(tenantId);
+
+    // 1. Tenta validar o operador ativo informado
+    if (operadorIdAtivo) {
+        const op = await prisma.funcionarios.findFirst({
+            where: { id_funcionario: Number(operadorIdAtivo), id_tenant: tenantNum }
+        });
+        if (op && op.hash_senha) {
+            const ok = await bcryptjs.compare(senha, op.hash_senha);
+            if (ok) return { valido: true, nome: op.nome_completo, operador: op };
+        }
+    }
+
+    // 2. Tenta qualquer funcionário ativo do tenant
+    const funcs = await prisma.funcionarios.findMany({
+        where: { id_tenant: tenantNum, ativo: true }
+    });
+    for (const f of funcs) {
+        if (f.hash_senha) {
+            const ok = await bcryptjs.compare(senha, f.hash_senha);
+            if (ok) return { valido: true, nome: f.nome_completo, operador: f };
+        }
+    }
+
+    // 3. Tenta o dono da loja (Admin / Tenant)
+    const dono = await prisma.tenants.findUnique({
+        where: { id: tenantNum }
+    });
+    if (dono && dono.hash_senha) {
+        const ok = await bcryptjs.compare(senha, dono.hash_senha);
+        if (ok) return { valido: true, nome: dono.nome_fantasia || 'Administrador', operador: { role: 'ADMIN' } };
+    }
+
+    return { valido: false };
+};
+
+export const obterStatusSessaoCaixa = async (req, res, next) => {
+    try {
+        await garantirTabelaPdvSessoes();
+        const caixaId = req.params.id || req.query.caixa_id;
+        const token = req.query.token || req.headers['x-token-caixa'];
+
+        let cx = null;
+        if (caixaId) {
+            cx = await prisma.pdv_caixas.findUnique({ where: { id: String(caixaId) } });
+        } else if (token) {
+            cx = await prisma.pdv_caixas.findFirst({ where: { token_conexao: String(token) } });
+        }
+
+        if (!cx) {
+            return res.status(404).json({ error: 'Caixa não encontrado.' });
+        }
+
+        const sessaoMem = sessoesAtivasMap.get(cx.id);
+        if (sessaoMem) {
+            return res.json({
+                caixa_id: cx.id,
+                numero_caixa: cx.numero_caixa,
+                nome: cx.nome,
+                serie_exe: cx.numero_caixa,
+                serie_web: 50 + cx.numero_caixa,
+                ambiente_ativo: sessaoMem.ambiente_ativo,
+                operador_id: sessaoMem.operador_id,
+                operador_nome: sessaoMem.operador_nome,
+                operador_codigo: sessaoMem.operador_codigo,
+                ultimo_heartbeat: sessaoMem.ultimo_heartbeat,
+                ativo: true
+            });
+        }
+
+        const sessoesDb = await prisma.$queryRawUnsafe(
+            `SELECT * FROM pdv_sessoes_ativas WHERE caixa_id = ? LIMIT 1`,
+            cx.id
+        ).catch(() => []);
+
+        if (sessoesDb && sessoesDb.length > 0) {
+            const s = sessoesDb[0];
+            sessoesAtivasMap.set(cx.id, s);
+            return res.json({
+                caixa_id: cx.id,
+                numero_caixa: cx.numero_caixa,
+                nome: cx.nome,
+                serie_exe: cx.numero_caixa,
+                serie_web: 50 + cx.numero_caixa,
+                ambiente_ativo: s.ambiente_ativo,
+                operador_id: s.operador_id,
+                operador_nome: s.operador_nome,
+                operador_codigo: s.operador_codigo,
+                ultimo_heartbeat: s.ultimo_heartbeat,
+                ativo: true
+            });
+        }
+
+        return res.json({
+            caixa_id: cx.id,
+            numero_caixa: cx.numero_caixa,
+            nome: cx.nome,
+            serie_exe: cx.numero_caixa,
+            serie_web: 50 + cx.numero_caixa,
+            ambiente_ativo: null,
+            operador_id: null,
+            operador_nome: null,
+            ativo: false
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const iniciarSessaoCaixa = async (req, res, next) => {
+    try {
+        await garantirTabelaPdvSessoes();
+        const { caixa_id, token_caixa, ambiente = 'WEB', operador_id, operador_nome, operador_codigo } = req.body;
+
+        let cx = null;
+        if (caixa_id) {
+            cx = await prisma.pdv_caixas.findUnique({ where: { id: String(caixa_id) } });
+        } else if (token_caixa) {
+            cx = await prisma.pdv_caixas.findFirst({ where: { token_conexao: String(token_caixa) } });
+        }
+
+        if (!cx) {
+            return res.status(404).json({ error: 'Caixa informado não existe.' });
+        }
+
+        const ambienteReq = String(ambiente).toUpperCase();
+        const sessaoAtual = sessoesAtivasMap.get(cx.id);
+
+        if (sessaoAtual && sessaoAtual.ambiente_ativo && sessaoAtual.ambiente_ativo !== ambienteReq) {
+            return res.status(409).json({
+                conflito: true,
+                ambiente_ativo: sessaoAtual.ambiente_ativo,
+                operador_nome: sessaoAtual.operador_nome || 'Operador em atividade',
+                operador_id: sessaoAtual.operador_id,
+                message: `Este caixa já está aberto no ${sessaoAtual.ambiente_ativo === 'EXE' ? 'PDV Desktop (.EXE)' : 'PDV Web'} por ${sessaoAtual.operador_nome || 'outro operador'}.`
+            });
+        }
+
+        const novoToken = crypto.randomUUID();
+        const sessao = {
+            caixa_id: cx.id,
+            tenant_id: cx.tenant_id,
+            ambiente_ativo: ambienteReq,
+            operador_id: String(operador_id || ''),
+            operador_nome: String(operador_nome || 'Operador'),
+            operador_codigo: String(operador_codigo || ''),
+            session_token: novoToken,
+            desconectado: 0,
+            desconectado_motivo: null,
+            ultimo_heartbeat: new Date()
+        };
+
+        sessoesAtivasMap.set(cx.id, sessao);
+
+        await prisma.$executeRawUnsafe(
+            `REPLACE INTO pdv_sessoes_ativas (caixa_id, tenant_id, ambiente_ativo, operador_id, operador_nome, operador_codigo, session_token, desconectado, desconectado_motivo, ultimo_heartbeat)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NOW())`,
+            cx.id, cx.tenant_id, ambienteReq, sessao.operador_id, sessao.operador_nome, sessao.operador_codigo, novoToken
+        ).catch(err => console.warn('[PDV] Erro ao persistir sessao:', err.message));
+
+        const serieEscolhida = ambienteReq === 'WEB' ? (50 + cx.numero_caixa) : cx.numero_caixa;
+
+        res.json({
+            success: true,
+            caixa_id: cx.id,
+            numero_caixa: cx.numero_caixa,
+            ambiente_ativo: ambienteReq,
+            serie: serieEscolhida,
+            session_token: novoToken,
+            message: `Sessão iniciada no ${ambienteReq} com sucesso!`
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const assumirSessaoCaixa = async (req, res, next) => {
+    try {
+        await garantirTabelaPdvSessoes();
+        const {
+            caixa_id,
+            token_caixa,
+            ambiente = 'WEB',
+            senha_operador,
+            operador_id,
+            operador_nome,
+            operador_codigo
+        } = req.body;
+
+        let cx = null;
+        if (caixa_id) {
+            cx = await prisma.pdv_caixas.findUnique({ where: { id: String(caixa_id) } });
+        } else if (token_caixa) {
+            cx = await prisma.pdv_caixas.findFirst({ where: { token_conexao: String(token_caixa) } });
+        }
+
+        if (!cx) {
+            return res.status(404).json({ error: 'Caixa informado não existe.' });
+        }
+
+        const ambienteReq = String(ambiente).toUpperCase();
+        const ambienteAnterior = ambienteReq === 'WEB' ? 'EXE' : 'WEB';
+        const sessaoAtual = sessoesAtivasMap.get(cx.id);
+
+        const idOperadorAtivo = sessaoAtual?.operador_id || null;
+        const validacao = await validarSenhaOperador(cx.tenant_id, senha_operador, idOperadorAtivo);
+
+        if (!validacao.valido) {
+            return res.status(401).json({
+                success: false,
+                message: 'Senha incorreta. Digite a senha do operador que está utilizando o caixa ou de um Administrador para assumir.'
+            });
+        }
+
+        const motivoDesconexao = `Caixa assumido no ${ambienteReq === 'WEB' ? 'PDV Web' : 'PDV Desktop (.EXE)'} pelo operador ${operador_nome || validacao.nome || 'Autorizado'}.`;
+        
+        if (sessaoAtual) {
+            sessaoAtual.desconectado = 1;
+            sessaoAtual.desconectado_motivo = motivoDesconexao;
+        }
+
+        const novoToken = crypto.randomUUID();
+        const novaSessao = {
+            caixa_id: cx.id,
+            tenant_id: cx.tenant_id,
+            ambiente_ativo: ambienteReq,
+            operador_id: String(operador_id || validacao.operador?.id_funcionario || ''),
+            operador_nome: String(operador_nome || validacao.nome || 'Operador'),
+            operador_codigo: String(operador_codigo || validacao.operador?.codigo_acesso || ''),
+            session_token: novoToken,
+            desconectado: 0,
+            desconectado_motivo: null,
+            ultimo_heartbeat: new Date()
+        };
+
+        sessoesAtivasMap.set(cx.id, novaSessao);
+
+        await prisma.$executeRawUnsafe(
+            `REPLACE INTO pdv_sessoes_ativas (caixa_id, tenant_id, ambiente_ativo, operador_id, operador_nome, operador_codigo, session_token, desconectado, desconectado_motivo, ultimo_heartbeat)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NOW())`,
+            cx.id, cx.tenant_id, ambienteReq, novaSessao.operador_id, novaSessao.operador_nome, novaSessao.operador_codigo, novoToken
+        ).catch(err => console.warn('[PDV] Erro ao persistir sessao:', err.message));
+
+        const serieEscolhida = ambienteReq === 'WEB' ? (50 + cx.numero_caixa) : cx.numero_caixa;
+
+        res.json({
+            success: true,
+            caixa_id: cx.id,
+            numero_caixa: cx.numero_caixa,
+            ambiente_ativo: ambienteReq,
+            serie: serieEscolhida,
+            session_token: novoToken,
+            message: `Terminal assumido com sucesso! O aplicativo anterior (${ambienteAnterior}) foi desconectado.`
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const heartbeatSessaoCaixa = async (req, res, next) => {
+    try {
+        const { caixa_id, token_caixa, session_token, ambiente } = req.body;
+
+        let cx = null;
+        if (caixa_id) {
+            cx = await prisma.pdv_caixas.findUnique({ where: { id: String(caixa_id) } });
+        } else if (token_caixa) {
+            cx = await prisma.pdv_caixas.findFirst({ where: { token_conexao: String(token_caixa) } });
+        }
+
+        if (!cx) {
+            return res.json({ online: false, desconectado: true, motivo: 'Caixa não cadastrado.' });
+        }
+
+        const sessao = sessoesAtivasMap.get(cx.id);
+
+        if (!sessao) {
+            return res.json({ online: true, ambiente_ativo: null });
+        }
+
+        const ambienteReq = String(ambiente || '').toUpperCase();
+
+        if (sessao.desconectado || (session_token && sessao.session_token !== session_token) || (ambienteReq && sessao.ambiente_ativo !== ambienteReq)) {
+            return res.json({
+                online: false,
+                desconectado: true,
+                ambiente_ativo: sessao.ambiente_ativo,
+                operador_nome: sessao.operador_nome,
+                motivo: sessao.desconectado_motivo || `Caixa assumido no ${sessao.ambiente_ativo === 'WEB' ? 'PDV Web' : 'PDV Desktop (.EXE)'} pelo operador ${sessao.operador_nome || 'ativo'}.`
+            });
+        }
+
+        sessao.ultimo_heartbeat = new Date();
+        return res.json({
+            online: true,
+            desconectado: false,
+            ambiente_ativo: sessao.ambiente_ativo,
+            operador_nome: sessao.operador_nome
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+export const encerrarSessaoCaixa = async (req, res, next) => {
+    try {
+        const { caixa_id, token_caixa } = req.body;
+        let cxId = caixa_id;
+        if (!cxId && token_caixa) {
+            const cx = await prisma.pdv_caixas.findFirst({ where: { token_conexao: String(token_caixa) } });
+            if (cx) cxId = cx.id;
+        }
+        if (cxId) {
+            sessoesAtivasMap.delete(cxId);
+            await prisma.$executeRawUnsafe(
+                `DELETE FROM pdv_sessoes_ativas WHERE caixa_id = ?`,
+                cxId
+            ).catch(() => {});
+        }
+        res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
     } catch (e) {
         next(e);
     }

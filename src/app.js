@@ -410,6 +410,37 @@ app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
                         }).catch(() => {});
                     }
 
+                    // 🪑 Libera a Mesa e finaliza comanda associada caso a venda tenha vindo de uma mesa
+                    if (venda.origem_mesa) {
+                        try {
+                            const om = venda.origem_mesa;
+                            if (om.id_pedido && Number(om.id_pedido) > 0) {
+                                await prisma.pedidos.updateMany({
+                                    where: { id_pedido: Number(om.id_pedido), id_tenant },
+                                    data: { status_comanda: 'FINALIZADO', status_pagamento: 'PAGO', status_entrega: 'Entregue' }
+                                }).catch(() => {});
+                            }
+                            const condicoesMesa = [];
+                            if (om.id_mesa && Number(om.id_mesa) > 0) condicoesMesa.push({ id_mesa: Number(om.id_mesa) });
+                            if (om.nome) {
+                                condicoesMesa.push({ nome: String(om.nome) });
+                                condicoesMesa.push({ mesa_agrupada: String(om.nome) });
+                            }
+                            if (condicoesMesa.length > 0) {
+                                await prisma.mesas.updateMany({
+                                    where: { id_tenant, OR: condicoesMesa },
+                                    data: { status: 'LIVRE', mesa_agrupada: null }
+                                }).catch(() => {});
+                            }
+                            if (app.get('io')) {
+                                app.get('io').emit('ATUALIZAR_MESAS', { id_tenant });
+                                app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
+                            }
+                        } catch (errMesa) {
+                            console.error('[SYNC MESA ERROR]:', errMesa.message);
+                        }
+                    }
+
                     // 🧾 Emissão Fiscal Automática (NFC-e) para SEFAZ e registro na tabela fiscal_notas (Notas de Saída)
                     if (venda.modo_fiscal !== 'NAO_FISCAL') {
                         try {

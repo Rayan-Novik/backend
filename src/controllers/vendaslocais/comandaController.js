@@ -387,16 +387,26 @@ export const fecharPagamentoComanda = async (req, res, next) => {
                 data: { saldo_sistema: { increment: comanda.preco_total } }
             });
 
-            // 4. 🟢 MÁGICA: Extrai todos os números separados (Ex: "03 + 02" vira ["03", "02"])
+            // 4. 🟢 MÁGICA: Extrai todos os números separados (Ex: "03 + 02" vira ["03", "02", "3", "Mesa 03"])
             const nomesMesas = comanda.codigo_comanda.split('+').map(n => n.replace(/[()]/g, '').trim());
+            const nomesVariantes = [...nomesMesas];
+            nomesMesas.forEach(n => {
+                const num = n.replace(/\D/g, '');
+                if (num) {
+                    nomesVariantes.push(num);
+                    nomesVariantes.push('Mesa ' + num);
+                    nomesVariantes.push(num.padStart(2, '0'));
+                    nomesVariantes.push('Mesa ' + num.padStart(2, '0'));
+                }
+            });
 
             // Libera TODAS as mesas que fizeram parte dessa comanda de uma vez só!
             await tx.mesas.updateMany({
                 where: {
                     id_tenant,
                     OR: [
-                        { nome: { in: nomesMesas } },
-                        { mesa_agrupada: { in: nomesMesas } },
+                        { nome: { in: nomesVariantes } },
+                        { mesa_agrupada: { in: nomesVariantes } },
                         { id_mesa: comanda.id_mesa || -1 }
                     ]
                 },
@@ -418,7 +428,10 @@ export const fecharPagamentoComanda = async (req, res, next) => {
             });
         } catch (finErr) {}
 
-        if (req.app.get('io')) req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
+        if (req.app.get('io')) {
+            req.app.get('io').emit('ATUALIZAR_COMANDAS', { id_tenant });
+            req.app.get('io').emit('ATUALIZAR_MESAS', { id_tenant });
+        }
 
         res.status(200).json({ message: "Comanda encerrada com sucesso e lançada no fluxo de caixa!" });
     } catch (error) {

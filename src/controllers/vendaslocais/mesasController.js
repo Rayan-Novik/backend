@@ -31,9 +31,37 @@ export const listarMesas = async (req, res) => {
         const id_tenant = req.tenantId;
         const mesas = await prisma.mesas.findMany({
             where: { id_tenant },
+            include: {
+                pedidos: {
+                    where: {
+                        status_comanda: { in: ['ABERTO', 'ABERTA', 'EM_PREPARO', 'AGUARDANDO_PAGAMENTO', 'FECHANDO'] },
+                        status_pagamento: { not: 'CANCELADO' }
+                    }
+                }
+            },
             orderBy: { nome: 'asc' }
         });
-        res.json(mesas);
+
+        // Auto-repara mesas que ficaram presas como OCUPADA sem pedido ativo
+        for (const m of mesas) {
+            if (m.status === 'OCUPADA' && (!m.pedidos || m.pedidos.length === 0)) {
+                await prisma.mesas.update({
+                    where: { id_mesa: m.id_mesa },
+                    data: { status: 'LIVRE', mesa_agrupada: null }
+                }).catch(() => {});
+                m.status = 'LIVRE';
+            }
+        }
+
+        res.json(mesas.map(m => ({
+            id_mesa: m.id_mesa,
+            nome: m.nome,
+            status: m.status,
+            id_tenant: m.id_tenant,
+            token: m.token,
+            url_qrcode: m.url_qrcode,
+            mesa_agrupada: m.mesa_agrupada
+        })));
     } catch (error) {
         res.status(500).json({ message: "Erro ao buscar mesas.", error: error.message });
     }
