@@ -381,8 +381,12 @@ export const criarPedido = async (req, res, next) => {
         }
 
         const {
-            id_endereco_entrega, preco_frete = 0, paymentMethod, paymentData, dados_entrega, cupom_aplicado, id_cupom, device_id
+            id_endereco_entrega, preco_frete: preco_frete_raw = 0, paymentMethod, paymentData, dados_entrega, cupom_aplicado, id_cupom, device_id
         } = req.body;
+
+        // 🔒 SEGURANÇA: nunca aceitar frete negativo ou inválido enviado pelo
+        // cliente (evita zerar/abater o total do pedido com frete negativo).
+        const preco_frete = Math.max(0, Number(preco_frete_raw) || 0);
 
         if (!id_endereco_entrega && Number(preco_frete) > 0 && !dados_entrega) {
             return res.status(400).json({ message: "O endereço de entrega é obrigatório." });

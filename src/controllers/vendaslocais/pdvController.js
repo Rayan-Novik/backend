@@ -2081,18 +2081,15 @@ export const obterCargaSyncCaixa = async (req, res, next) => {
             });
         }
 
-        const id_tenant = req.tenantId || (caixa ? Number(caixa.tenant_id) : 1);
+        // 🔒 SEGURANÇA: a carga de sincronização expõe o catálogo e dados de
+        // funcionários; só é liberada para um caixa com token válido. Sem isso,
+        // não cai mais no "primeiro caixa do tenant" nem no tenant 1 por padrão.
+        if (!caixa) {
+            return res.status(401).json({ message: "Token de caixa inválido ou ausente." });
+        }
+
+        const id_tenant = req.tenantId || Number(caixa.tenant_id);
         const tenantStr = String(id_tenant);
-
-        if (!caixa) {
-            caixa = await prisma.pdv_caixas.findFirst({
-                where: { tenant_id: tenantStr, ativo: true }
-            });
-        }
-
-        if (!caixa) {
-            return res.status(404).json({ message: "Nenhum caixa encontrado para sincronizar." });
-        }
 
         // 🛡️ VERIFICAÇÃO DE SEGURANÇA DE HARDWARE (HWID 1:1 ANTI-PIRATARIA / ANTI-USO CONCORRENTE)
         const hwidRecebido = hwid ? String(hwid).split(' ')[0].trim() : '';
@@ -2580,7 +2577,10 @@ export const obterMesasSync = async (req, res, next) => {
             });
             if (caixa) id_tenant = Number(caixa.tenant_id);
         }
-        if (!id_tenant) id_tenant = 1;
+        // 🔒 SEGURANÇA: exige token de caixa válido (ou sessão autenticada).
+        if (!id_tenant) {
+            return res.status(401).json({ error: "Token de caixa inválido ou ausente." });
+        }
 
         const mesasFormatadas = await obterMesasDbFormatadas(id_tenant);
         res.json(mesasFormatadas);
@@ -2600,7 +2600,10 @@ export const liberarMesaCaixa = async (req, res, next) => {
             });
             if (caixa) id_tenant = Number(caixa.tenant_id);
         }
-        if (!id_tenant) id_tenant = 1;
+        // 🔒 SEGURANÇA: só libera mesa/comanda com token de caixa válido.
+        if (!id_tenant) {
+            return res.status(401).json({ error: "Token de caixa inválido ou ausente." });
+        }
 
         // 1. Finaliza pedido/comanda associado
         const condicoesPedido = [];

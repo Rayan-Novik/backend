@@ -43,6 +43,16 @@ const router = express.Router();
 // Aplica autenticação e injeção de tenant fiscal em todas as rotas
 router.use(protect, injectFiscalTenant);
 
+// 🔒 SEGURANÇA: o módulo fiscal expõe certificado digital (A1), CSC e emissão
+// de notas. Clientes finais da loja (role CLIENTE) não podem acessá-lo. Dono,
+// equipe e o caixa do PDV (tratado como dono) continuam com acesso normal.
+router.use((req, res, next) => {
+    if (req.user && req.user.role === 'CLIENTE' && !req.user.is_dono && !req.user.isAdmin) {
+        return res.status(403).json({ message: 'Acesso restrito à equipe da loja.' });
+    }
+    next();
+});
+
 // ==========================================
 // 🏢 EMPRESAS E CONFIGURAÇÕES FISCAIS
 // ==========================================

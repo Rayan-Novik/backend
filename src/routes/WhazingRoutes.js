@@ -1,7 +1,18 @@
 import { Router } from 'express';
 import kanbanController from '../controllers/KanbanController.js';
+import { protect } from '../middlewares/authMiddleware.js';
 
 const router = Router();
+
+// 🔒 SEGURANÇA: todo o Kanban/Whazing (ler tickets, enviar WhatsApp em nome da
+// loja, mover cards) exige login. O painel admin já envia o token Bearer.
+router.use(protect);
+router.use((req, res, next) => {
+    if (req.user && req.user.role === 'CLIENTE') {
+        return res.status(403).json({ message: 'Acesso restrito à equipe da loja.' });
+    }
+    next();
+});
 
 // ==========================================
 // 1. ROTAS DO KANBAN (Boards, Colunas, Cards)

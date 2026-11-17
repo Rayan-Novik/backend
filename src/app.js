@@ -300,7 +300,7 @@ app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
     try {
         const token = req.query.token || req.headers['x-token-caixa'] || req.headers['x-token-dispositivo'] || req.headers['authorization']?.replace('Bearer ', '');
         const lote = Array.isArray(req.body) ? req.body : (req.body?.lote || []);
-        console.log(`[SYNC DESKTOP] Recebidas ${lote.length} movimentações offline do PDV (Token: ${token || 'N/A'}).`);
+        console.log(`[SYNC DESKTOP] Recebidas ${lote.length} movimentações offline do PDV.`);
 
         let caixa = null;
         if (token) {
@@ -318,7 +318,14 @@ app.post(['/api/sync/movimento', '/sync/movimento'], async (req, res) => {
             }
         }
 
-        const id_tenant = req.tenantId || (caixa ? Number(caixa.tenant_id) : 1);
+        // 🔒 SEGURANÇA: só aceita movimentações (vendas, caixa, NFC-e) de um
+        // caixa com token válido. Antes, sem token caía no tenant 1 e qualquer
+        // um conseguia gravar vendas/estoque/fiscal sem autenticação.
+        if (!caixa) {
+            return res.status(401).json({ success: false, error: "Token de caixa inválido ou ausente." });
+        }
+
+        const id_tenant = req.tenantId || Number(caixa.tenant_id);
 
         // Busca ou cria o consumidor padrão para o tenant
         const emailPadrao = `consumidor_${id_tenant}@pdv.padrao`;

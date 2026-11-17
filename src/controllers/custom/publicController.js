@@ -44,6 +44,21 @@ export const getPublicConfig = async (req, res) => {
         const id_tenant = parseInt(tenantString, 10);
         const { chave } = req.params;
 
+        // 🔒 SEGURANÇA: esta rota é PÚBLICA (sem login). Só pode devolver chaves
+        // de apresentação da loja. Qualquer outra chave (tokens de gateway,
+        // segredos, SMTP, credenciais) fica bloqueada para não vazar dados.
+        const CHAVES_PUBLICAS_PERMITIDAS = new Set([
+            'SITE_TITLE', 'LOGO_URL', 'FAVICON_URL', 'HOMEPAGE_LAYOUT',
+            'STORE_LAYOUT_STYLE', 'BODY_BG_COLOR', 'SITE_TEXT_COLOR',
+            'HEADER_PRIMARY_COLOR', 'HEADER_SECONDARY_COLOR', 'FOOTER_COLOR',
+            'BTN_PRIMARY_BG', 'BTN_PRIMARY_TEXT',
+            'pix_desconto_ativo', 'pix_desconto_porcentagem',
+            'RETIRADA_ATIVA', 'CONSUMO_LOCAL_ATIVO', 'RECOMENDACOES_ATIVO'
+        ]);
+        if (!CHAVES_PUBLICAS_PERMITIDAS.has(chave)) {
+            return res.status(403).json({ message: "Configuração não disponível publicamente." });
+        }
+
         // 🟢 Usamos o ConfiguracaoModel.get para que ele Descriptografe a galeria!
         const valor = await ConfiguracaoModel.get(chave, id_tenant);
 
